@@ -1,30 +1,43 @@
 /**
  * Intent Extraction System
- * Extracts structured data from natural language using LLM with structured outputs
+ * Extracts structured data from natural language using LLM function calling
  */
 
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
+import OpenAI from 'openai';
 import { Intent, IntentSchema } from '../types';
 
 export interface ExtractionConfig {
+  provider?: 'openai' | 'anthropic';
   model: string;
   temperature?: number;
   maxRetries?: number;
+  apiKey?: string;
 }
 
 /**
  * Intent extractor that converts natural language to structured data
  */
 export class IntentExtractor {
+  private provider: 'openai' | 'anthropic';
   private model: string;
   private temperature: number;
   private maxRetries: number;
+  private openAIClient?: OpenAI;
 
   constructor(config: ExtractionConfig) {
+    this.provider = config.provider || 'openai';
     this.model = config.model;
-    this.temperature = config.temperature || 0.3; // Lower temperature for more consistent extraction
+    this.temperature = config.temperature || 0.3; // Lower temperature for stable extraction
     this.maxRetries = config.maxRetries || 3;
+
+    if (this.provider === 'openai') {
+      const apiKey = config.apiKey || process.env.OPENAI_API_KEY;
+      if (apiKey) {
+        this.openAIClient = new OpenAI({ apiKey });
+      }
+    }
   }
 
   /**
@@ -56,118 +69,200 @@ export class IntentExtractor {
   }
 
   /**
-   * Extract structured data using LLM
-   * In production, this would call OpenAI/Anthropic API with structured outputs
+   * Extract structured data using LLM with function calling and structured outputs fallback.
    */
   private async extractWithLLM(
     input: string,
     schema?: z.ZodSchema,
     context?: Record<string, any>
   ): Promise<z.infer<typeof IntentSchema>> {
-    // Mock implementation - in production would use actual LLM API
-    // Example with OpenAI:
-    // const response = await openai.chat.completions.create({
-    //   model: this.model,
-    //   messages: [{ role: 'user', content: input }],
-    //   response_format: { type: 'json_schema', json_schema: schema },
-    // });
-
-    // For now, return a mock structured response
-    return this.mockExtraction(input, schema, context);
-  }
-
-  /**
-   * Mock extraction for demonstration
-   * In production, this would be replaced with actual LLM API calls
-   */
-  private mockExtraction(
-    input: string,
-    schema?: z.ZodSchema,
-    context?: Record<string, any>
-  ): z.infer<typeof IntentSchema> {
-    // Simple keyword-based extraction for demonstration
-    const lowerInput = input.toLowerCase();
-
-    let intent = '';
-    const entities: Record<string, any> = {};
-    const requiredFields: string[] = [];
-
-    // Detect intent type
-    if (lowerInput.includes('hire') || lowerInput.includes('recruit')) {
-      intent = 'hire_employee';
-      entities.position = this.extractEntity(input, 'position');
-      entities.department = this.extractEntity(input, 'department');
-      if (!entities.position) requiredFields.push('position');
-      if (!entities.department) requiredFields.push('department');
-    } else if (lowerInput.includes('leave') || lowerInput.includes('vacation')) {
-      intent = 'request_leave';
-      entities.startDate = this.extractEntity(input, 'date');
-      entities.duration = this.extractEntity(input, 'duration');
-      if (!entities.startDate) requiredFields.push('startDate');
-      if (!entities.duration) requiredFields.push('duration');
-    } else if (lowerInput.includes('expense') || lowerInput.includes('reimburse')) {
-      intent = 'submit_expense';
-      entities.amount = this.extractAmount(input);
-      entities.category = this.extractEntity(input, 'category');
-      entities.description = this.extractEntity(input, 'description');
-      if (!entities.amount) requiredFields.push('amount');
-      if (!entities.category) requiredFields.push('category');
-    } else if (lowerInput.includes('contract') || lowerInput.includes('agreement')) {
-      intent = 'review_contract';
-      entities.contractType = this.extractEntity(input, 'type');
-      entities.party = this.extractEntity(input, 'party');
-      if (!entities.contractType) requiredFields.push('contractType');
-      if (!entities.party) requiredFields.push('party');
-    } else if (lowerInput.includes('budget') || lowerInput.includes('allocate')) {
-      intent = 'budget_allocation';
-      entities.department = this.extractEntity(input, 'department');
-      entities.amount = this.extractAmount(input);
-      entities.period = this.extractEntity(input, 'period');
-      if (!entities.department) requiredFields.push('department');
-      if (!entities.amount) requiredFields.push('amount');
-    } else {
-      intent = 'general_inquiry';
-      entities.query = input;
+    if (this.provider !== 'openai') {
+      throw new Error(
+        `Provider ${this.provider} is not implemented in this build. Use provider=openai for production extraction.`
+      );
     }
 
-    return {
-      intent,
-      entities,
-      requiredFields,
-      confidence: requiredFields.length === 0 ? 0.9 : 0.6,
-    };
+    const client = this.getOpenAIClient();
+    let lastError: Error | undefined;
+
+    for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
+      try {
+        const extraction = await this.extractWithFunctionCalling(client, input, context);
+
+        // Optional domain schema validation (HR/Finance/Legal). IntentSchema remains the output contract.
+        if (schema) {
+          schema.parse(extraction);
+        }
+
+        return IntentSchema.parse(extraction);
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error('Unknown extraction error');
+
+        // Fallback to JSON schema structured output if tool call parsing fails.
+        try {
+          const extraction = await this.extractWithStructuredOutput(client, input, context);
+          if (schema) {
+            schema.parse(extraction);
+          }
+          return IntentSchema.parse(extraction);
+        } catch {
+          // Continue retry loop.
+        }
+
+        if (attempt < this.maxRetries) {
+          await this.sleep(200 * attempt);
+        }
+      }
+    }
+
+    throw new Error(
+      `Intent extraction failed after ${this.maxRetries} attempts: ${lastError?.message || 'Unknown error'}`
+    );
   }
 
-  /**
-   * Extract named entity from text
-   */
-  private extractEntity(text: string, entityType: string): string | undefined {
-    // Simple pattern matching - in production would use NER models
-    const patterns: Record<string, RegExp> = {
-      position: /(?:for|as|position:?)\s+(?:a\s+)?([a-zA-Z\s]+?)(?:\s+in|\s+at|$)/i,
-      department: /(?:in|for|department:?)\s+(?:the\s+)?([a-zA-Z\s]+?)(?:\s+department)?/i,
-      date: /(?:on|from|starting)\s+(\d{1,2}\/\d{1,2}\/\d{4}|\d{4}-\d{2}-\d{2}|[a-zA-Z]+\s+\d{1,2})/i,
-      duration: /(?:for)\s+(\d+\s+(?:days?|weeks?|months?))/i,
-      category: /(?:category|for|as)\s+([a-zA-Z\s]+)/i,
-      type: /(?:type|kind)\s+([a-zA-Z\s]+)/i,
-      party: /(?:with|party:?)\s+([a-zA-Z\s]+)/i,
-      period: /(?:for|period:?)\s+(Q\d|[a-zA-Z]+\s+\d{4})/i,
-    };
+  private getOpenAIClient(): OpenAI {
+    if (!this.openAIClient) {
+      const apiKey = process.env.OPENAI_API_KEY;
+      if (!apiKey) {
+        throw new Error(
+          'OPENAI_API_KEY is required for intent extraction. Configure llm.apiKey or set OPENAI_API_KEY.'
+        );
+      }
+      this.openAIClient = new OpenAI({ apiKey });
+    }
 
-    const pattern = patterns[entityType];
-    if (!pattern) return undefined;
-
-    const match = text.match(pattern);
-    return match ? match[1].trim() : undefined;
+    return this.openAIClient;
   }
 
-  /**
-   * Extract monetary amount from text
-   */
-  private extractAmount(text: string): number | undefined {
-    const amountPattern = /\$?\s*(\d+(?:,\d{3})*(?:\.\d{2})?)/;
-    const match = text.match(amountPattern);
-    return match ? parseFloat(match[1].replace(/,/g, '')) : undefined;
+  private async extractWithFunctionCalling(
+    client: OpenAI,
+    input: string,
+    context?: Record<string, any>
+  ): Promise<z.infer<typeof IntentSchema>> {
+    const completion = await client.chat.completions.create({
+      model: this.model,
+      temperature: this.temperature,
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You are an enterprise intent extraction engine. Return only structured business intent with required fields and confidence.',
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            input,
+            context: context || {},
+            instruction:
+              'Infer intent, extract entities, and list only truly missing required fields for execution.',
+          }),
+        },
+      ],
+      tools: [
+        {
+          type: 'function',
+          function: {
+            name: 'extract_intent',
+            description: 'Extract normalized intent and structured entities from enterprise user input.',
+            parameters: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                intent: {
+                  type: 'string',
+                  description: 'The normalized intent name (e.g., submit_expense, hire_employee).',
+                },
+                entities: {
+                  type: 'object',
+                  description: 'Structured entities extracted from input.',
+                  additionalProperties: true,
+                },
+                requiredFields: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Fields that are mandatory but still missing.',
+                },
+                confidence: {
+                  type: 'number',
+                  minimum: 0,
+                  maximum: 1,
+                  description: 'Confidence of extraction.',
+                },
+              },
+              required: ['intent', 'entities', 'requiredFields', 'confidence'],
+            },
+          },
+        },
+      ],
+      tool_choice: {
+        type: 'function',
+        function: { name: 'extract_intent' },
+      },
+    });
+
+    const toolCall = completion.choices[0]?.message?.tool_calls?.find(
+      (call) => call.type === 'function' && call.function?.name === 'extract_intent'
+    );
+
+    if (!toolCall?.function?.arguments) {
+      throw new Error('Model did not return extract_intent function arguments');
+    }
+
+    return JSON.parse(toolCall.function.arguments);
+  }
+
+  private async extractWithStructuredOutput(
+    client: OpenAI,
+    input: string,
+    context?: Record<string, any>
+  ): Promise<z.infer<typeof IntentSchema>> {
+    const completion = await client.chat.completions.create({
+      model: this.model,
+      temperature: this.temperature,
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You are an enterprise intent extraction engine. Respond in strict JSON only based on the provided schema.',
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({ input, context: context || {} }),
+        },
+      ],
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'intent_extraction',
+          schema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              intent: { type: 'string' },
+              entities: { type: 'object', additionalProperties: true },
+              requiredFields: {
+                type: 'array',
+                items: { type: 'string' },
+              },
+              confidence: { type: 'number', minimum: 0, maximum: 1 },
+            },
+            required: ['intent', 'entities', 'requiredFields', 'confidence'],
+          },
+          strict: true,
+        },
+      },
+    });
+
+    const content = completion.choices[0]?.message?.content;
+    if (!content) {
+      throw new Error('Model returned empty structured content');
+    }
+
+    return JSON.parse(content);
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   /**
@@ -220,7 +315,7 @@ export class IntentExtractor {
       metadata: {
         ...intent.metadata,
         requiredFields: (intent.metadata?.requiredFields || []).filter(
-          (field) => !newExtraction.entities[field]
+          (field: string) => !newExtraction.entities[field]
         ),
       },
     };

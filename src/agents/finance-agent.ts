@@ -138,18 +138,120 @@ export class FinanceAgent extends BaseAgent {
       return {
         success: false,
         requiresApproval: true,
+        error: `Payment amount ${amount} requires approval`,
         step: step.description,
         amount,
       };
     }
 
-    // Mock successful execution
-    return {
-      success: true,
-      stepId: step.id,
-      output: `Completed: ${step.description}`,
-      amount,
-      timestamp: new Date(),
-    };
+    try {
+      const lowerStep = step.description.toLowerCase();
+
+      if (lowerStep.includes('check expense against policy') || lowerStep.includes('available funds')) {
+        const budgetCheck = await this.executeTool('sap_operation', {
+          operation: 'read',
+          servicePath: '/api/budget/check',
+          query: {
+            department: String(workflow.context.department || 'general'),
+            amount: String(amount),
+          },
+        });
+
+        return {
+          success: true,
+          stepId: step.id,
+          output: budgetCheck,
+          timestamp: new Date(),
+        };
+      }
+
+      if (lowerStep.includes('process payment')) {
+        const paymentResult = await this.executeTool('payment_processing', {
+          operation: 'transfer',
+          amount,
+          currency: workflow.context.currency || 'USD',
+          recipient: workflow.context.userId || 'employee',
+          description: workflow.context.intent || step.description,
+        });
+
+        return {
+          success: true,
+          stepId: step.id,
+          output: paymentResult,
+          amount,
+          timestamp: new Date(),
+        };
+      }
+
+      if (lowerStep.includes('update accounting records') || lowerStep.includes('allocate budget')) {
+        const accountingResult = await this.executeTool('sap_operation', {
+          operation: 'create',
+          servicePath: '/api/accounting/entries',
+          body: {
+            workflowId: workflow.id,
+            stepId: step.id,
+            amount,
+            category: workflow.context.category || 'general',
+            description: step.description,
+          },
+        });
+
+        return {
+          success: true,
+          stepId: step.id,
+          output: accountingResult,
+          timestamp: new Date(),
+        };
+      }
+
+      if (lowerStep.includes('generate invoice')) {
+        const invoice = await this.executeTool('sap_operation', {
+          operation: 'create',
+          servicePath: '/api/invoices',
+          body: {
+            workflowId: workflow.id,
+            customerId: workflow.context.customerId,
+            amount,
+            currency: workflow.context.currency || 'USD',
+          },
+        });
+
+        return {
+          success: true,
+          stepId: step.id,
+          output: invoice,
+          timestamp: new Date(),
+        };
+      }
+
+      if (lowerStep.includes('send invoice')) {
+        const emailResult = await this.executeTool('send_email', {
+          to: [workflow.context.customerEmail || 'billing@example.com'],
+          subject: `Invoice for workflow ${workflow.id}`,
+          body: `Please review and process invoice generated in workflow ${workflow.id}.`,
+        });
+
+        return {
+          success: true,
+          stepId: step.id,
+          output: emailResult,
+          timestamp: new Date(),
+        };
+      }
+
+      return {
+        success: true,
+        stepId: step.id,
+        output: `Completed: ${step.description}`,
+        amount,
+        timestamp: new Date(),
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown finance execution error',
+        step: step.description,
+      };
+    }
   }
 }

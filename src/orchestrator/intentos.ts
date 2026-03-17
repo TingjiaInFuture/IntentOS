@@ -6,7 +6,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { IntentExtractor } from '../intent/extractor';
 import { WorkflowStateMachine } from '../workflow/state-machine';
-import { MemorySystem } from '../memory/memory-system';
+import { MemorySystem, createMemorySystemFromConfig } from '../memory/memory-system';
 import { ApprovalSystem } from '../approval/approval-system';
 import { SecurityManager } from '../security/security-manager';
 import { ToolRegistry, createDefaultToolRegistry } from '../tools/tool-registry';
@@ -35,18 +35,20 @@ export class IntentOS {
   constructor(config: SystemConfig) {
     // Initialize core systems
     this.intentExtractor = new IntentExtractor({
+      provider: config.llm.provider,
       model: config.llm.model,
       temperature: config.llm.temperature,
+      apiKey: config.llm.apiKey,
     });
 
     this.workflowStateMachine = new WorkflowStateMachine();
-    this.memorySystem = new MemorySystem();
+    this.memorySystem = createMemorySystemFromConfig(config);
     this.approvalSystem = new ApprovalSystem();
     this.securityManager = new SecurityManager(
       config.security.jwtSecret,
       config.security.jwtExpiry
     );
-    this.toolRegistry = createDefaultToolRegistry();
+    this.toolRegistry = createDefaultToolRegistry(config.integrations, config.database.url);
 
     // Initialize agents
     this.agents = new Map();
@@ -266,7 +268,11 @@ export class IntentOS {
         );
       } else {
         // Check if approval is needed
-        if (result.error?.includes('approval')) {
+        const needsApproval =
+          Boolean(result.requiresApproval) ||
+          (typeof result.error === 'string' && result.error.toLowerCase().includes('approval'));
+
+        if (needsApproval) {
           this.workflowStateMachine.updateTaskStatus(
             workflowId,
             task.id,

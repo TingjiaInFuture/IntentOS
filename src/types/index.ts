@@ -382,18 +382,72 @@ export interface SystemConfig {
     model: string;
     temperature: number;
     maxTokens: number;
+    apiKey?: string;
   };
   database: {
     url: string;
   };
   vectorStore?: {
     provider: 'pinecone' | 'milvus';
-    config: Record<string, any>;
+    config: {
+      topK?: number;
+      dimension?: number;
+      namespace?: string;
+      // Pinecone
+      apiKey?: string;
+      indexName?: string;
+      // Milvus
+      address?: string;
+      username?: string;
+      password?: string;
+      collectionName?: string;
+      metricType?: 'COSINE' | 'L2' | 'IP';
+    };
+    embeddingModel?: string;
+    apiKey?: string;
   };
   graphDB: {
     uri: string;
     user: string;
     password: string;
+    database?: string;
+  };
+  integrations?: {
+    database?: {
+      connectionString?: string;
+    };
+    email?: {
+      endpoint?: string;
+      apiKey?: string;
+      from?: string;
+    };
+    document?: {
+      endpoint?: string;
+      apiKey?: string;
+    };
+    calendar?: {
+      endpoint?: string;
+      apiKey?: string;
+    };
+    slack?: {
+      botToken?: string;
+    };
+    salesforce?: {
+      instanceUrl?: string;
+      accessToken?: string;
+      apiVersion?: string;
+    };
+    sap?: {
+      baseUrl?: string;
+      username?: string;
+      password?: string;
+      client?: string;
+      apiKey?: string;
+    };
+    rpa?: {
+      endpoint?: string;
+      apiKey?: string;
+    };
   };
   security: {
     jwtSecret: string;

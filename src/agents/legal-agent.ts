@@ -128,18 +128,78 @@ export class LegalAgent extends BaseAgent {
       return {
         success: false,
         requiresApproval: true,
+        error: `Legal high-risk step requires approval: ${step.description}`,
         step: step.description,
         riskLevel: step.riskLevel,
       };
     }
 
-    // Mock successful execution
-    return {
-      success: true,
-      stepId: step.id,
-      output: `Completed: ${step.description}`,
-      riskLevel: step.riskLevel,
-      timestamp: new Date(),
-    };
+    try {
+      const lowerStep = step.description.toLowerCase();
+
+      if (lowerStep.includes('extract and analyze contract terms')) {
+        const extraction = await this.executeTool('process_document', {
+          documentPath: workflow.context.documentPath || workflow.context.contractPath || '',
+          operation: 'extract_text',
+        });
+
+        return {
+          success: true,
+          stepId: step.id,
+          output: extraction,
+          riskLevel: step.riskLevel,
+          timestamp: new Date(),
+        };
+      }
+
+      if (lowerStep.includes('check compliance')) {
+        const compliance = await this.executeTool('sap_operation', {
+          operation: 'read',
+          servicePath: '/api/compliance/check',
+          query: {
+            workflowId: workflow.id,
+            jurisdiction: String(workflow.context.jurisdiction || 'global'),
+          },
+        });
+
+        return {
+          success: true,
+          stepId: step.id,
+          output: compliance,
+          riskLevel: step.riskLevel,
+          timestamp: new Date(),
+        };
+      }
+
+      if (lowerStep.includes('draft suggested modifications')) {
+        const notify = await this.executeTool('send_email', {
+          to: [workflow.context.requesterEmail || 'legal-review@example.com'],
+          subject: `Legal review update for workflow ${workflow.id}`,
+          body: `Legal review step completed: ${step.description}`,
+        });
+
+        return {
+          success: true,
+          stepId: step.id,
+          output: notify,
+          riskLevel: step.riskLevel,
+          timestamp: new Date(),
+        };
+      }
+
+      return {
+        success: true,
+        stepId: step.id,
+        output: `Completed: ${step.description}`,
+        riskLevel: step.riskLevel,
+        timestamp: new Date(),
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown legal execution error',
+        step: step.description,
+      };
+    }
   }
 }

@@ -36,6 +36,7 @@ export class SecurityManager {
         'process_document',
         'file_system',
         'slack_message',
+        'rpa_job',
       ],
       maxBudget: 10000, // Can approve up to $10k for hiring/training
       canApproveUp: 5000,
@@ -50,6 +51,9 @@ export class SecurityManager {
         'send_email',
         'payment_processing',
         'crm_operation',
+        'salesforce_operation',
+        'sap_operation',
+        'rpa_job',
         'http_request',
         'file_system',
       ],
@@ -65,6 +69,7 @@ export class SecurityManager {
         'database_query',
         'send_email',
         'process_document',
+        'salesforce_operation',
         'file_system',
         'http_request',
       ],
@@ -83,6 +88,9 @@ export class SecurityManager {
         'calendar_event',
         'file_system',
         'slack_message',
+        'salesforce_operation',
+        'sap_operation',
+        'rpa_job',
       ],
       maxBudget: 25000,
       canApproveUp: 10000,
@@ -151,8 +159,8 @@ export class SecurityManager {
         username: user.username,
         role: user.role,
       },
-      this.jwtSecret,
-      { expiresIn: this.jwtExpiry }
+      this.jwtSecret as jwt.Secret,
+      { expiresIn: this.jwtExpiry as jwt.SignOptions['expiresIn'] }
     );
 
     return { user, token };

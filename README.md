@@ -178,14 +178,33 @@ Create a `.env` file:
 # LLM Configuration
 OPENAI_API_KEY=your_key_here
 LLM_MODEL=gpt-4
+EMBEDDING_MODEL=text-embedding-3-small
 
 # Database
 DATABASE_URL=postgresql://user:password@localhost:5432/intentos
+
+# Vector Store
+VECTOR_STORE_PROVIDER=pinecone # or milvus
+PINECONE_API_KEY=your_key_here
+PINECONE_INDEX=intentos-memory
+PINECONE_NAMESPACE=intentos
+MILVUS_ADDRESS=localhost:19530
+MILVUS_COLLECTION=intentos_memory
 
 # Graph Database (Neo4j)
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
 NEO4J_PASSWORD=password
+
+# Enterprise Tool Integrations
+SALESFORCE_INSTANCE_URL=https://your-instance.my.salesforce.com
+SALESFORCE_ACCESS_TOKEN=your_salesforce_token
+SAP_BASE_URL=https://your-sap-endpoint
+SAP_USERNAME=your_sap_user
+SAP_PASSWORD=your_sap_password
+RPA_API_ENDPOINT=https://your-rpa-endpoint
+RPA_API_KEY=your_rpa_key
+SLACK_BOT_TOKEN=xoxb-...
 
 # Security
 JWT_SECRET=your_secret_key

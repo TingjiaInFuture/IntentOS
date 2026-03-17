@@ -4,7 +4,7 @@
  */
 
 import { BaseAgent, AgentConfig } from './base-agent';
-import { AgentRole, PlanStep, WorkflowState, TaskNode } from '../types';
+import { AgentRole, PlanStep, WorkflowState } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 
 export class HRAgent extends BaseAgent {
@@ -137,16 +137,77 @@ export class HRAgent extends BaseAgent {
       return {
         success: false,
         requiresApproval: true,
+        error: `HR action requires approval: ${step.description}`,
         step: step.description,
       };
     }
 
-    // Mock successful execution
-    return {
-      success: true,
-      stepId: step.id,
-      output: `Completed: ${step.description}`,
-      timestamp: new Date(),
-    };
+    try {
+      const lowerStep = step.description.toLowerCase();
+
+      if (lowerStep.includes('schedule interviews') || lowerStep.includes('schedule review meeting')) {
+        const calendarResult = await this.executeTool('calendar_event', {
+          action: 'create',
+          title: step.description,
+          startTime: workflow.context.startTime || new Date(Date.now() + 86400000).toISOString(),
+          endTime: workflow.context.endTime || new Date(Date.now() + 90000000).toISOString(),
+          attendees: workflow.context.attendees || [],
+        });
+
+        return {
+          success: true,
+          stepId: step.id,
+          output: calendarResult,
+          timestamp: new Date(),
+        };
+      }
+
+      if (lowerStep.includes('post job listing')) {
+        const rpaResult = await this.executeTool('rpa_job', {
+          operation: 'trigger',
+          processKey: 'publish_job_listing',
+          input: {
+            workflowId: workflow.id,
+            position: workflow.context.position,
+            department: workflow.context.department,
+          },
+        });
+
+        return {
+          success: true,
+          stepId: step.id,
+          output: rpaResult,
+          timestamp: new Date(),
+        };
+      }
+
+      if (lowerStep.includes('get manager approval')) {
+        const notify = await this.executeTool('send_email', {
+          to: [workflow.context.managerEmail || 'manager@example.com'],
+          subject: `Approval required for workflow ${workflow.id}`,
+          body: `Please review HR request: ${workflow.context.intent || step.description}`,
+        });
+
+        return {
+          success: true,
+          stepId: step.id,
+          output: notify,
+          timestamp: new Date(),
+        };
+      }
+
+      return {
+        success: true,
+        stepId: step.id,
+        output: `Completed: ${step.description}`,
+        timestamp: new Date(),
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown HR execution error',
+        step: step.description,
+      };
+    }
   }
 }
