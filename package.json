@@ -1,7 +1,7 @@
 {
   "name": "intentos",
-  "version": "0.1.0",
-  "description": "AI-native enterprise workflow engine with intent-driven automation",
+  "version": "0.2.0",
+  "description": "AI-native enterprise management system - zero legacy dependencies",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
@@ -9,12 +9,12 @@
     "dev": "ts-node src/index.ts",
     "test": "jest",
     "lint": "eslint src --ext .ts",
-    "format": "prettier --write \"src/**/*.ts\""
+    "format": "prettier --write \"src/**/*.ts\"",
+    "db:migrate": "ts-node src/persistence/migrate.ts"
   },
   "keywords": [
-    "ai",
+    "ai-native",
     "agent",
-    "workflow",
     "enterprise",
     "automation",
     "intent-driven"
@@ -24,18 +24,15 @@
   "dependencies": {
     "@pinecone-database/pinecone": "^3.0.1",
     "@zilliz/milvus2-sdk-node": "^2.4.8",
-    "@langchain/core": "^0.1.0",
-    "@langchain/langgraph": "^0.0.20",
-    "@langchain/openai": "^0.0.14",
-    "langchain": "^0.1.0",
+    "openai": "^4.57.0",
     "zod": "^3.22.4",
     "uuid": "^9.0.1",
-    "openai": "^4.57.0",
     "dotenv": "^16.4.1",
     "pg": "^8.11.3",
     "neo4j-driver": "^5.16.0",
     "jsonwebtoken": "^9.0.2",
-    "bcrypt": "^5.1.1"
+    "bcrypt": "^5.1.1",
+    "nodemailer": "^6.9.8"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
@@ -43,6 +40,7 @@
     "@types/jsonwebtoken": "^9.0.5",
     "@types/bcrypt": "^5.0.2",
     "@types/pg": "^8.10.9",
+    "@types/nodemailer": "^6.4.14",
     "@typescript-eslint/eslint-plugin": "^6.19.0",
     "@typescript-eslint/parser": "^6.19.0",
     "eslint": "^8.56.0",

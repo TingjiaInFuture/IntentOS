@@ -1,5 +1,6 @@
 /**
  * Core type definitions for IntentOS
+ * AI-Native system definitions
  */
 
 import { z } from 'zod';
@@ -8,9 +9,6 @@ import { z } from 'zod';
 // Agent Types
 // ============================================================================
 
-/**
- * Agent role defines the business domain an agent operates in
- */
 export enum AgentRole {
   HR = 'hr',
   FINANCE = 'finance',
@@ -22,9 +20,6 @@ export enum AgentRole {
   PROCUREMENT = 'procurement',
 }
 
-/**
- * Task status in the workflow state machine
- */
 export enum TaskStatus {
   PENDING = 'pending',
   IN_PROGRESS = 'in_progress',
@@ -36,9 +31,6 @@ export enum TaskStatus {
   CANCELLED = 'cancelled',
 }
 
-/**
- * Priority levels for tasks
- */
 export enum TaskPriority {
   LOW = 'low',
   MEDIUM = 'medium',
@@ -50,9 +42,6 @@ export enum TaskPriority {
 // Intent & Extraction Types
 // ============================================================================
 
-/**
- * User intent extracted from natural language
- */
 export interface Intent {
   id: string;
   userId: string;
@@ -64,9 +53,6 @@ export interface Intent {
   metadata?: Record<string, any>;
 }
 
-/**
- * Structured data schema for intent extraction
- */
 export const IntentSchema = z.object({
   intent: z.string().describe('The main intent/goal extracted from user input'),
   entities: z.record(z.any()).describe('Structured entities extracted from the input'),
@@ -78,9 +64,6 @@ export const IntentSchema = z.object({
 // Task & Workflow Types
 // ============================================================================
 
-/**
- * A single task node in the workflow
- */
 export interface TaskNode {
   id: string;
   type: string;
@@ -98,9 +81,6 @@ export interface TaskNode {
   approvalData?: ApprovalRequest;
 }
 
-/**
- * Workflow state containing all tasks and their relationships
- */
 export interface WorkflowState {
   id: string;
   intentId: string;
@@ -113,13 +93,10 @@ export interface WorkflowState {
   updatedAt: Date;
 }
 
-/**
- * Checkpoint for state persistence and recovery
- */
 export interface Checkpoint {
   id: string;
   workflowId: string;
-  state: string; // Serialized workflow state
+  state: string;
   timestamp: Date;
   version: number;
 }
@@ -128,9 +105,6 @@ export interface Checkpoint {
 // Human-in-the-Loop Types
 // ============================================================================
 
-/**
- * Approval request for human review
- */
 export interface ApprovalRequest {
   id: string;
   workflowId: string;
@@ -146,9 +120,6 @@ export interface ApprovalRequest {
   comments?: string;
 }
 
-/**
- * Dynamic confirmation card for UI display
- */
 export interface ConfirmationCard {
   title: string;
   description: string;
@@ -169,9 +140,6 @@ export interface ConfirmationCard {
 // Memory & Knowledge Graph Types
 // ============================================================================
 
-/**
- * Entity in the knowledge graph
- */
 export interface GraphEntity {
   id: string;
   type: string;
@@ -180,9 +148,6 @@ export interface GraphEntity {
   updatedAt: Date;
 }
 
-/**
- * Relationship between entities in the knowledge graph
- */
 export interface GraphRelationship {
   id: string;
   type: string;
@@ -192,9 +157,6 @@ export interface GraphRelationship {
   createdAt: Date;
 }
 
-/**
- * Memory entry for RAG system
- */
 export interface MemoryEntry {
   id: string;
   content: string;
@@ -207,9 +169,6 @@ export interface MemoryEntry {
 // Tool Types
 // ============================================================================
 
-/**
- * Tool definition for agent capabilities
- */
 export interface Tool {
   name: string;
   description: string;
@@ -217,9 +176,6 @@ export interface Tool {
   execute: (params: any) => Promise<any>;
 }
 
-/**
- * Tool execution result
- */
 export interface ToolResult {
   success: boolean;
   data?: any;
@@ -231,9 +187,6 @@ export interface ToolResult {
 // Security & RBAC Types
 // ============================================================================
 
-/**
- * User role in the system
- */
 export enum UserRole {
   ADMIN = 'admin',
   MANAGER = 'manager',
@@ -241,17 +194,11 @@ export enum UserRole {
   GUEST = 'guest',
 }
 
-/**
- * Permission definition
- */
 export interface Permission {
   resource: string;
   actions: string[];
 }
 
-/**
- * User with authentication and authorization info
- */
 export interface User {
   id: string;
   username: string;
@@ -262,9 +209,6 @@ export interface User {
   metadata?: Record<string, any>;
 }
 
-/**
- * Agent permissions and capabilities
- */
 export interface AgentPermissions {
   role: AgentRole;
   allowedTools: string[];
@@ -277,22 +221,17 @@ export interface AgentPermissions {
 // Plan & Reflection Types
 // ============================================================================
 
-/**
- * Plan step in the Plan-and-Solve pattern
- */
 export interface PlanStep {
   id: string;
   description: string;
   reasoning: string;
   expectedOutcome: string;
   dependencies: string[];
+  toolsToUse?: string[];
   estimatedCost?: number;
   riskLevel: 'low' | 'medium' | 'high';
 }
 
-/**
- * Complete execution plan
- */
 export interface ExecutionPlan {
   id: string;
   goal: string;
@@ -302,9 +241,6 @@ export interface ExecutionPlan {
   updatedAt: Date;
 }
 
-/**
- * Reflection on execution results
- */
 export interface Reflection {
   id: string;
   workflowId: string;
@@ -321,61 +257,58 @@ export interface Reflection {
 // CLEAR Framework Metrics
 // ============================================================================
 
-/**
- * Metrics for evaluating agent performance using CLEAR framework
- */
 export interface AgentMetrics {
-  workflowId: string;
+  workflowId?: string;
   agentRole: AgentRole;
-
-  // Cost: Token and compute resource usage
   cost: {
     totalTokens: number;
     promptTokens: number;
     completionTokens: number;
     estimatedCostUSD: number;
   };
-
-  // Latency: Response times
   latency: {
     totalDurationMs: number;
     planningDurationMs: number;
     executionDurationMs: number;
     avgStepDurationMs: number;
   };
-
-  // Efficacy: Task completion success
   efficacy: {
     tasksCompleted: number;
     tasksFailed: number;
     successRate: number;
     goalAchieved: boolean;
   };
-
-  // Assurance: Compliance and safety
   assurance: {
     policyViolations: number;
     securityChecks: number;
     complianceScore: number;
   };
-
-  // Reliability: Consistency across runs
   reliability: {
     runId: string;
     consistencyScore: number;
     errorCount: number;
   };
-
-  timestamp: Date;
+  timestamp?: Date;
 }
 
 // ============================================================================
-// Configuration Types
+// Audit Types
 // ============================================================================
 
-/**
- * System configuration
- */
+export interface AuditEntry {
+  id: string;
+  timestamp: Date;
+  actor: string;
+  action: string;
+  resource: string;
+  details: Record<string, any>;
+  outcome: 'success' | 'failure' | 'denied';
+}
+
+// ============================================================================
+// Configuration - AI-Native
+// ============================================================================
+
 export interface SystemConfig {
   llm: {
     provider: 'openai' | 'anthropic';
@@ -393,10 +326,8 @@ export interface SystemConfig {
       topK?: number;
       dimension?: number;
       namespace?: string;
-      // Pinecone
       apiKey?: string;
       indexName?: string;
-      // Milvus
       address?: string;
       username?: string;
       password?: string;
@@ -406,48 +337,18 @@ export interface SystemConfig {
     embeddingModel?: string;
     apiKey?: string;
   };
-  graphDB: {
+  graphDB?: {
     uri: string;
     user: string;
     password: string;
     database?: string;
   };
-  integrations?: {
-    database?: {
-      connectionString?: string;
-    };
-    email?: {
-      endpoint?: string;
-      apiKey?: string;
-      from?: string;
-    };
-    document?: {
-      endpoint?: string;
-      apiKey?: string;
-    };
-    calendar?: {
-      endpoint?: string;
-      apiKey?: string;
-    };
-    slack?: {
-      botToken?: string;
-    };
-    salesforce?: {
-      instanceUrl?: string;
-      accessToken?: string;
-      apiVersion?: string;
-    };
-    sap?: {
-      baseUrl?: string;
-      username?: string;
-      password?: string;
-      client?: string;
-      apiKey?: string;
-    };
-    rpa?: {
-      endpoint?: string;
-      apiKey?: string;
-    };
+  smtp?: {
+    host: string;
+    port: number;
+    user?: string;
+    pass?: string;
+    from: string;
   };
   security: {
     jwtSecret: string;

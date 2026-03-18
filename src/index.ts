@@ -8,10 +8,16 @@ export * from './agents/base-agent';
 export * from './agents/hr-agent';
 export * from './agents/finance-agent';
 export * from './agents/legal-agent';
+export * from './agents/operations-agent';
+export * from './agents/sales-agent';
+export * from './agents/marketing-agent';
+export * from './agents/it-agent';
+export * from './agents/procurement-agent';
 export * from './intent/extractor';
 export * from './workflow/state-machine';
 export * from './memory/memory-system';
 export * from './approval/approval-system';
+export * from './audit/audit-log';
 export * from './security/security-manager';
 export * from './tools/tool-registry';
 export * from './orchestrator/intentos';
@@ -30,9 +36,9 @@ export function createIntentOS(config?: Partial<SystemConfig>): IntentOS {
   const defaultConfig: SystemConfig = {
     llm: {
       provider: 'openai',
-      model: process.env.LLM_MODEL || 'gpt-4',
-      temperature: 0.7,
-      maxTokens: 4000,
+      model: process.env.LLM_MODEL || 'gpt-4.1',
+      temperature: Number(process.env.LLM_TEMPERATURE || 0.7),
+      maxTokens: Number(process.env.LLM_MAX_TOKENS || 4000),
       apiKey: process.env.OPENAI_API_KEY,
     },
     database: {
@@ -61,42 +67,12 @@ export function createIntentOS(config?: Partial<SystemConfig>): IntentOS {
       password: process.env.NEO4J_PASSWORD || 'password',
       database: process.env.NEO4J_DATABASE || 'neo4j',
     },
-    integrations: {
-      database: {
-        connectionString: process.env.DATABASE_URL,
-      },
-      email: {
-        endpoint: process.env.EMAIL_API_ENDPOINT,
-        apiKey: process.env.EMAIL_API_KEY,
-        from: process.env.EMAIL_FROM,
-      },
-      document: {
-        endpoint: process.env.DOC_API_ENDPOINT,
-        apiKey: process.env.DOC_API_KEY,
-      },
-      calendar: {
-        endpoint: process.env.CALENDAR_API_ENDPOINT,
-        apiKey: process.env.CALENDAR_API_KEY,
-      },
-      slack: {
-        botToken: process.env.SLACK_BOT_TOKEN,
-      },
-      salesforce: {
-        instanceUrl: process.env.SALESFORCE_INSTANCE_URL,
-        accessToken: process.env.SALESFORCE_ACCESS_TOKEN,
-        apiVersion: process.env.SALESFORCE_API_VERSION || 'v61.0',
-      },
-      sap: {
-        baseUrl: process.env.SAP_BASE_URL,
-        username: process.env.SAP_USERNAME,
-        password: process.env.SAP_PASSWORD,
-        client: process.env.SAP_CLIENT,
-        apiKey: process.env.SAP_API_KEY,
-      },
-      rpa: {
-        endpoint: process.env.RPA_API_ENDPOINT,
-        apiKey: process.env.RPA_API_KEY,
-      },
+    smtp: {
+      host: process.env.SMTP_HOST || 'localhost',
+      port: Number(process.env.SMTP_PORT || 587),
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS,
+      from: process.env.SMTP_FROM || 'noreply@intentos.local',
     },
     security: {
       jwtSecret: process.env.JWT_SECRET || 'your-secret-key',

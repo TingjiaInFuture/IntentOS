@@ -1,13 +1,11 @@
 /**
- * Base Agent class implementing Plan-and-Solve pattern
- * Agents are autonomous entities that can plan, execute, and reflect on tasks
+ * Base Agent - Plan-and-Solve with LLM-driven planning
  */
 
 import { v4 as uuidv4 } from 'uuid';
+import OpenAI from 'openai';
 import {
   AgentRole,
-  TaskNode,
-  TaskStatus,
   ExecutionPlan,
   PlanStep,
   Reflection,
@@ -23,9 +21,12 @@ export interface AgentConfig {
   temperature?: number;
   maxIterations?: number;
   permissions: AgentPermissions;
+  apiKey?: string;
+  systemPrompt?: string;
+  availableToolNames?: string[];
 }
 
-export abstract class BaseAgent {
+export class BaseAgent {
   protected role: AgentRole;
   protected model: string;
   protected temperature: number;
@@ -33,6 +34,9 @@ export abstract class BaseAgent {
   protected permissions: AgentPermissions;
   protected tools: Map<string, Tool>;
   protected metrics: Partial<AgentMetrics>;
+  protected apiKey?: string;
+  protected systemPrompt: string;
+  protected availableToolNames: string[];
 
   constructor(config: AgentConfig) {
     this.role = config.role;
@@ -40,59 +44,142 @@ export abstract class BaseAgent {
     this.temperature = config.temperature || 0.7;
     this.maxIterations = config.maxIterations || 10;
     this.permissions = config.permissions;
+    this.apiKey = config.apiKey;
+    this.availableToolNames = config.availableToolNames || config.permissions.allowedTools;
     this.tools = new Map();
+
     this.metrics = {
       agentRole: this.role,
-      cost: { totalTokens: 0, promptTokens: 0, completionTokens: 0, estimatedCostUSD: 0 },
-      latency: { totalDurationMs: 0, planningDurationMs: 0, executionDurationMs: 0, avgStepDurationMs: 0 },
-      efficacy: { tasksCompleted: 0, tasksFailed: 0, successRate: 0, goalAchieved: false },
-      assurance: { policyViolations: 0, securityChecks: 0, complianceScore: 1.0 },
-      reliability: { runId: uuidv4(), consistencyScore: 1.0, errorCount: 0 },
+      cost: {
+        totalTokens: 0,
+        promptTokens: 0,
+        completionTokens: 0,
+        estimatedCostUSD: 0,
+      },
+      latency: {
+        totalDurationMs: 0,
+        planningDurationMs: 0,
+        executionDurationMs: 0,
+        avgStepDurationMs: 0,
+      },
+      efficacy: {
+        tasksCompleted: 0,
+        tasksFailed: 0,
+        successRate: 0,
+        goalAchieved: false,
+      },
+      assurance: {
+        policyViolations: 0,
+        securityChecks: 0,
+        complianceScore: 1.0,
+      },
+      reliability: {
+        runId: uuidv4(),
+        consistencyScore: 1.0,
+        errorCount: 0,
+      },
     };
+
+    this.systemPrompt = config.systemPrompt || this.getDefaultSystemPrompt();
   }
 
-  /**
-   * Plan phase: Generate execution plan based on goal and context
-   */
-  protected async plan(goal: string, context: Record<string, any>): Promise<ExecutionPlan> {
-    const startTime = Date.now();
+  protected getDefaultSystemPrompt(): string {
+    return `You are an AI agent specialized in ${this.role} operations for an enterprise.
+You have access to the following tools: ${this.availableToolNames.join(', ')}.
+You must plan and execute tasks step by step.
+Always explain your reasoning.
+Never fabricate data - use tools to query real information.
+For high-risk actions, recommend human approval.`;
+  }
 
-    try {
-      const steps = await this.generatePlanSteps(goal, context);
+  protected async generatePlanSteps(goal: string, context: Record<string, any>): Promise<PlanStep[]> {
+    const client = this.getOpenAIClient();
 
-      const plan: ExecutionPlan = {
-        id: uuidv4(),
-        goal,
-        steps,
-        totalEstimatedCost: steps.reduce((sum, step) => sum + (step.estimatedCost || 0), 0),
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
+    const completion = await client.chat.completions.create({
+      model: this.model,
+      temperature: 0.4,
+      messages: [
+        {
+          role: 'system',
+          content: `${this.systemPrompt}
 
-      this.metrics.latency!.planningDurationMs = Date.now() - startTime;
+You are generating an execution plan. Given a goal and context, produce a list of concrete steps.
+Each step must specify:
+- description: what to do
+- reasoning: why this step is needed
+- expectedOutcome: what success looks like
+- dependencies: IDs of steps that must complete first (use step indices like "step_0", "step_1")
+- toolsToUse: which tools from [${this.availableToolNames.join(', ')}] this step should use
+- riskLevel: "low", "medium", or "high"
+- estimatedCost: estimated monetary cost (0 if not applicable)
 
-      return plan;
-    } catch (error) {
-      this.metrics.reliability!.errorCount++;
-      throw error;
+Respond ONLY in JSON: { "steps": [...] }`,
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            goal,
+            context,
+            availableTools: this.availableToolNames,
+            agentRole: this.role,
+            constraints: this.permissions.restrictions,
+          }),
+        },
+      ],
+      response_format: { type: 'json_object' },
+    });
+
+    const content = completion.choices[0]?.message?.content;
+    if (!content) {
+      throw new Error('LLM returned empty plan');
     }
+
+    if (completion.usage) {
+      this.metrics.cost!.promptTokens += completion.usage.prompt_tokens;
+      this.metrics.cost!.completionTokens += completion.usage.completion_tokens;
+      this.metrics.cost!.totalTokens += completion.usage.total_tokens;
+    }
+
+    const parsed = JSON.parse(content) as { steps?: Array<Record<string, any>> };
+    const rawSteps = parsed.steps || [];
+
+    const idMap = new Map<string, string>();
+    const steps: PlanStep[] = rawSteps.map((raw, index) => {
+      const id = uuidv4();
+      idMap.set(`step_${index}`, id);
+
+      const toolsToUse = Array.isArray(raw.toolsToUse)
+        ? raw.toolsToUse.filter((t) => typeof t === 'string')
+        : [];
+
+      const riskLevel =
+        raw.riskLevel === 'medium' || raw.riskLevel === 'high' ? raw.riskLevel : 'low';
+
+      return {
+        id,
+        description: String(raw.description || `Step ${index + 1}`),
+        reasoning: String(raw.reasoning || ''),
+        expectedOutcome: String(raw.expectedOutcome || ''),
+        dependencies: [],
+        toolsToUse,
+        estimatedCost: Number(raw.estimatedCost || 0),
+        riskLevel,
+      };
+    });
+
+    rawSteps.forEach((raw, index) => {
+      const deps = Array.isArray(raw.dependencies)
+        ? raw.dependencies.filter((d) => typeof d === 'string')
+        : [];
+      steps[index].dependencies = deps
+        .map((dep) => idMap.get(dep))
+        .filter((depId): depId is string => Boolean(depId));
+    });
+
+    return steps;
   }
 
-  /**
-   * Generate plan steps - to be implemented by concrete agents
-   */
-  protected abstract generatePlanSteps(
-    goal: string,
-    context: Record<string, any>
-  ): Promise<PlanStep[]>;
-
-  /**
-   * Execute phase: Execute the plan step by step
-   */
-  protected async execute(
-    plan: ExecutionPlan,
-    workflow: WorkflowState
-  ): Promise<Map<string, any>> {
+  protected async execute(plan: ExecutionPlan, workflow: WorkflowState): Promise<Map<string, any>> {
     const startTime = Date.now();
     const results = new Map<string, any>();
     let iteration = 0;
@@ -103,24 +190,18 @@ export abstract class BaseAgent {
           throw new Error('Max iterations reached');
         }
 
-        // Check if dependencies are met
         const dependenciesMet = step.dependencies.every((depId) => results.has(depId));
         if (!dependenciesMet) {
           throw new Error(`Dependencies not met for step ${step.id}`);
         }
 
-        // Execute the step
-        const result = await this.executeStep(step, workflow, results);
+        const stepContext = this.buildStepContext(step, workflow, results);
+        const result = await this.executeStep(step, workflow, results, stepContext);
         results.set(step.id, result);
 
-        // Reflect on the result
         const reflection = await this.reflect(step, result, workflow);
-
-        // If we need to replan, do it
-        if (reflection.shouldReplan) {
-          const newPlan = reflection.newPlan!;
-          // Continue with new plan
-          plan.steps = newPlan.steps;
+        if (reflection.shouldReplan && reflection.newPlan) {
+          plan.steps = reflection.newPlan.steps;
           plan.updatedAt = new Date();
         }
 
@@ -131,7 +212,7 @@ export abstract class BaseAgent {
       this.metrics.efficacy!.goalAchieved = true;
       this.metrics.latency!.executionDurationMs = Date.now() - startTime;
       this.metrics.latency!.avgStepDurationMs =
-        this.metrics.latency!.executionDurationMs / iteration;
+        this.metrics.latency!.executionDurationMs / Math.max(iteration, 1);
 
       return results;
     } catch (error) {
@@ -141,23 +222,175 @@ export abstract class BaseAgent {
     }
   }
 
-  /**
-   * Execute a single plan step - to be implemented by concrete agents
-   */
-  protected abstract executeStep(
+  private buildStepContext(
     step: PlanStep,
     workflow: WorkflowState,
     previousResults: Map<string, any>
-  ): Promise<any>;
+  ): string {
+    const contextParts: string[] = [];
 
-  /**
-   * Reflect phase: Analyze execution results and decide if replanning is needed
-   */
-  protected async reflect(
+    contextParts.push(`## Current Step\n${step.description}\nReasoning: ${step.reasoning}`);
+    contextParts.push(`## Workflow Context\n${JSON.stringify(workflow.context, null, 2)}`);
+
+    if (step.dependencies.length > 0) {
+      const dependencyResults: Record<string, any> = {};
+      for (const depId of step.dependencies) {
+        dependencyResults[depId] = previousResults.get(depId);
+      }
+
+      contextParts.push(`## Previous Step Results\n${JSON.stringify(dependencyResults, null, 2)}`);
+    }
+
+    return contextParts.join('\n\n');
+  }
+
+  protected async executeStep(
     step: PlanStep,
-    result: any,
-    workflow: WorkflowState
-  ): Promise<Reflection> {
+    workflow: WorkflowState,
+    _previousResults: Map<string, any>,
+    stepContext: string
+  ): Promise<any> {
+    console.log(`[${this.role}] Executing: ${step.description}`);
+
+    const canApproveLimit = this.permissions.canApproveUp || 0;
+    if (step.riskLevel === 'high' || (step.estimatedCost || 0) > canApproveLimit) {
+      return {
+        success: false,
+        requiresApproval: true,
+        error: `Step requires human approval: ${step.description}`,
+        step: step.description,
+        riskLevel: step.riskLevel,
+      };
+    }
+
+    const toolsToUse = step.toolsToUse || [];
+    if (toolsToUse.length > 0) {
+      return this.executeStepWithTools(step, workflow, stepContext, toolsToUse);
+    }
+
+    return this.executeStepWithLLM(step, stepContext);
+  }
+
+  private async executeStepWithTools(
+    step: PlanStep,
+    _workflow: WorkflowState,
+    stepContext: string,
+    toolNames: string[]
+  ): Promise<any> {
+    const client = this.getOpenAIClient();
+
+    const toolDefs = toolNames
+      .map((name) => this.tools.get(name))
+      .filter((tool): tool is Tool => Boolean(tool))
+      .map((tool) => ({
+        type: 'function' as const,
+        function: {
+          name: tool.name,
+          description: tool.description,
+          parameters: this.zodToJsonSchema(tool.parameters),
+        },
+      }));
+
+    if (toolDefs.length === 0) {
+      return this.executeStepWithLLM(step, stepContext);
+    }
+
+    const completion = await client.chat.completions.create({
+      model: this.model,
+      temperature: 0.3,
+      messages: [
+        {
+          role: 'system',
+          content: `${this.systemPrompt}\n\nExecute this step by calling the appropriate tool(s).`,
+        },
+        {
+          role: 'user',
+          content: `Step: ${step.description}\n\nContext:\n${stepContext}`,
+        },
+      ],
+      tools: toolDefs,
+    });
+
+    if (completion.usage) {
+      this.metrics.cost!.totalTokens += completion.usage.total_tokens;
+    }
+
+    const message = completion.choices[0]?.message;
+    const toolCalls = message?.tool_calls || [];
+
+    if (toolCalls.length === 0) {
+      return {
+        success: true,
+        stepId: step.id,
+        output: message?.content || `Completed: ${step.description}`,
+        timestamp: new Date(),
+      };
+    }
+
+    const toolResults: any[] = [];
+
+    for (const toolCall of toolCalls) {
+      const tool = this.tools.get(toolCall.function.name);
+      if (!tool) {
+        toolResults.push({ error: `Tool ${toolCall.function.name} not found` });
+        continue;
+      }
+
+      this.metrics.assurance!.securityChecks++;
+
+      try {
+        const parsedArgs = toolCall.function.arguments
+          ? JSON.parse(toolCall.function.arguments)
+          : {};
+        const result = await tool.execute(parsedArgs);
+        toolResults.push({
+          toolName: toolCall.function.name,
+          result,
+        });
+      } catch (error) {
+        this.metrics.reliability!.errorCount++;
+        toolResults.push({
+          toolName: toolCall.function.name,
+          error: error instanceof Error ? error.message : 'Tool execution failed',
+        });
+      }
+    }
+
+    return {
+      success: toolResults.every((r) => !r.error),
+      stepId: step.id,
+      output: toolResults,
+      timestamp: new Date(),
+    };
+  }
+
+  private async executeStepWithLLM(step: PlanStep, stepContext: string): Promise<any> {
+    const client = this.getOpenAIClient();
+    const completion = await client.chat.completions.create({
+      model: this.model,
+      temperature: this.temperature,
+      messages: [
+        { role: 'system', content: this.systemPrompt },
+        {
+          role: 'user',
+          content: `Execute this step:\n${step.description}\n\nContext:\n${stepContext}`,
+        },
+      ],
+    });
+
+    if (completion.usage) {
+      this.metrics.cost!.totalTokens += completion.usage.total_tokens;
+    }
+
+    return {
+      success: true,
+      stepId: step.id,
+      output: completion.choices[0]?.message?.content || '',
+      timestamp: new Date(),
+    };
+  }
+
+  protected async reflect(step: PlanStep, result: any, workflow: WorkflowState): Promise<Reflection> {
     const reflection: Reflection = {
       id: uuidv4(),
       workflowId: workflow.id,
@@ -169,15 +402,10 @@ export abstract class BaseAgent {
       timestamp: new Date(),
     };
 
-    // Analyze the result
-    if (result.error) {
+    if (result.error && !result.requiresApproval) {
       reflection.issues.push(`Step failed: ${result.error}`);
       reflection.shouldReplan = true;
-
-      // Generate a new plan if needed
-      if (reflection.shouldReplan) {
-        reflection.newPlan = await this.replan(step, result, workflow);
-      }
+      reflection.newPlan = await this.replan(step, result, workflow);
     } else {
       reflection.observation = 'Step completed successfully';
     }
@@ -185,18 +413,18 @@ export abstract class BaseAgent {
     return reflection;
   }
 
-  /**
-   * Replan: Generate a new plan when obstacles are encountered
-   */
   protected async replan(
     failedStep: PlanStep,
     result: any,
     workflow: WorkflowState
   ): Promise<ExecutionPlan> {
-    // Default implementation: retry with adjusted parameters
     const newSteps = await this.generatePlanSteps(
       `Recover from failed step: ${failedStep.description}. Error: ${result.error}`,
-      workflow.context
+      {
+        ...workflow.context,
+        previousError: result.error,
+        failedStep: failedStep.description,
+      }
     );
 
     return {
@@ -208,24 +436,20 @@ export abstract class BaseAgent {
     };
   }
 
-  /**
-   * Main entry point: Plan, execute, and reflect
-   */
   async run(goal: string, workflow: WorkflowState): Promise<any> {
     const totalStartTime = Date.now();
 
     try {
-      // Plan phase
+      const planStart = Date.now();
       const plan = await this.plan(goal, workflow.context);
+      this.metrics.latency!.planningDurationMs = Date.now() - planStart;
 
-      // Execute phase with reflection loop
       const results = await this.execute(plan, workflow);
 
-      // Calculate final metrics
       this.metrics.latency!.totalDurationMs = Date.now() - totalStartTime;
       this.metrics.efficacy!.successRate =
         this.metrics.efficacy!.tasksCompleted /
-        (this.metrics.efficacy!.tasksCompleted + this.metrics.efficacy!.tasksFailed);
+        Math.max(this.metrics.efficacy!.tasksCompleted + this.metrics.efficacy!.tasksFailed, 1);
 
       return {
         success: true,
@@ -242,61 +466,79 @@ export abstract class BaseAgent {
     }
   }
 
-  /**
-   * Register a tool for this agent
-   */
+  protected async plan(goal: string, context: Record<string, any>): Promise<ExecutionPlan> {
+    const steps = await this.generatePlanSteps(goal, context);
+
+    return {
+      id: uuidv4(),
+      goal,
+      steps,
+      totalEstimatedCost: steps.reduce((sum, step) => sum + (step.estimatedCost || 0), 0),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+  }
+
   registerTool(tool: Tool): void {
     if (!this.permissions.allowedTools.includes(tool.name)) {
       throw new Error(`Tool ${tool.name} not allowed for agent ${this.role}`);
     }
+
     this.tools.set(tool.name, tool);
   }
 
-  /**
-   * Execute a tool
-   */
-  protected async executeTool(toolName: string, params: any): Promise<any> {
-    const tool = this.tools.get(toolName);
-    if (!tool) {
-      throw new Error(`Tool ${toolName} not found`);
-    }
-
-    this.metrics.assurance!.securityChecks++;
-
-    try {
-      const result = await tool.execute(params);
-      return result;
-    } catch (error) {
-      this.metrics.reliability!.errorCount++;
-      throw error;
-    }
-  }
-
-  /**
-   * Check if an action requires approval
-   */
-  protected requiresApproval(action: string, params: any): boolean {
-    // High-value transactions need approval
-    if (params.amount && params.amount > (this.permissions.maxBudget || 0)) {
-      return true;
-    }
-
-    // Sensitive operations need approval
-    const sensitiveActions = ['delete', 'terminate', 'transfer_funds'];
-    return sensitiveActions.some((sensitive) => action.includes(sensitive));
-  }
-
-  /**
-   * Get current metrics
-   */
   getMetrics(): Partial<AgentMetrics> {
-    return { ...this.metrics, timestamp: new Date() };
+    return {
+      ...this.metrics,
+      timestamp: new Date(),
+    };
   }
 
-  /**
-   * Get agent role
-   */
   getRole(): AgentRole {
     return this.role;
+  }
+
+  protected getOpenAIClient(): OpenAI {
+    const apiKey = this.apiKey || process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      throw new Error('OPENAI_API_KEY required');
+    }
+
+    return new OpenAI({ apiKey });
+  }
+
+  private zodToJsonSchema(schema: any): any {
+    if (!schema || !schema._def) {
+      return { type: 'object', additionalProperties: true };
+    }
+
+    if (schema._def.typeName === 'ZodObject') {
+      const shape = schema._def.shape();
+      const properties: Record<string, any> = {};
+      const required: string[] = [];
+
+      for (const [key, value] of Object.entries(shape) as Array<[string, any]>) {
+        properties[key] = {
+          type: 'string',
+          description: value?._def?.description || key,
+        };
+
+        if (!value.isOptional?.()) {
+          required.push(key);
+        }
+      }
+
+      return {
+        type: 'object',
+        properties,
+        required,
+      };
+    }
+
+    return {
+      type: 'object',
+      properties: {},
+      additionalProperties: true,
+    };
   }
 }

@@ -3,7 +3,6 @@
  * Main orchestrator that coordinates agents, workflows, and system components
  */
 
-import { v4 as uuidv4 } from 'uuid';
 import { IntentExtractor } from '../intent/extractor';
 import { WorkflowStateMachine } from '../workflow/state-machine';
 import { MemorySystem, createMemorySystemFromConfig } from '../memory/memory-system';
@@ -14,6 +13,11 @@ import { BaseAgent } from '../agents/base-agent';
 import { HRAgent } from '../agents/hr-agent';
 import { FinanceAgent } from '../agents/finance-agent';
 import { LegalAgent } from '../agents/legal-agent';
+import { OperationsAgent } from '../agents/operations-agent';
+import { SalesAgent } from '../agents/sales-agent';
+import { MarketingAgent } from '../agents/marketing-agent';
+import { ITAgent } from '../agents/it-agent';
+import { ProcurementAgent } from '../agents/procurement-agent';
 import {
   AgentRole,
   TaskStatus,
@@ -48,7 +52,7 @@ export class IntentOS {
       config.security.jwtSecret,
       config.security.jwtExpiry
     );
-    this.toolRegistry = createDefaultToolRegistry(config.integrations, config.database.url);
+    this.toolRegistry = createDefaultToolRegistry(config);
 
     // Initialize agents
     this.agents = new Map();
@@ -62,7 +66,7 @@ export class IntentOS {
     const agentConfig = {
       model: config.llm.model,
       temperature: config.llm.temperature,
-      permissions: this.securityManager.getAgentPermissions(AgentRole.HR),
+      apiKey: config.llm.apiKey,
     };
 
     // Create HR Agent
@@ -71,6 +75,7 @@ export class IntentOS {
       new HRAgent({
         ...agentConfig,
         permissions: this.securityManager.getAgentPermissions(AgentRole.HR),
+        availableToolNames: this.securityManager.getAgentPermissions(AgentRole.HR).allowedTools,
       })
     );
 
@@ -80,6 +85,8 @@ export class IntentOS {
       new FinanceAgent({
         ...agentConfig,
         permissions: this.securityManager.getAgentPermissions(AgentRole.FINANCE),
+        availableToolNames:
+          this.securityManager.getAgentPermissions(AgentRole.FINANCE).allowedTools,
       })
     );
 
@@ -89,6 +96,60 @@ export class IntentOS {
       new LegalAgent({
         ...agentConfig,
         permissions: this.securityManager.getAgentPermissions(AgentRole.LEGAL),
+        availableToolNames: this.securityManager.getAgentPermissions(AgentRole.LEGAL).allowedTools,
+      })
+    );
+
+    // Create Operations Agent
+    this.agents.set(
+      AgentRole.OPERATIONS,
+      new OperationsAgent({
+        ...agentConfig,
+        permissions: this.securityManager.getAgentPermissions(AgentRole.OPERATIONS),
+        availableToolNames:
+          this.securityManager.getAgentPermissions(AgentRole.OPERATIONS).allowedTools,
+      })
+    );
+
+    // Create Sales Agent
+    this.agents.set(
+      AgentRole.SALES,
+      new SalesAgent({
+        ...agentConfig,
+        permissions: this.securityManager.getAgentPermissions(AgentRole.SALES),
+        availableToolNames: this.securityManager.getAgentPermissions(AgentRole.SALES).allowedTools,
+      })
+    );
+
+    // Create Marketing Agent
+    this.agents.set(
+      AgentRole.MARKETING,
+      new MarketingAgent({
+        ...agentConfig,
+        permissions: this.securityManager.getAgentPermissions(AgentRole.MARKETING),
+        availableToolNames:
+          this.securityManager.getAgentPermissions(AgentRole.MARKETING).allowedTools,
+      })
+    );
+
+    // Create IT Agent
+    this.agents.set(
+      AgentRole.IT,
+      new ITAgent({
+        ...agentConfig,
+        permissions: this.securityManager.getAgentPermissions(AgentRole.IT),
+        availableToolNames: this.securityManager.getAgentPermissions(AgentRole.IT).allowedTools,
+      })
+    );
+
+    // Create Procurement Agent
+    this.agents.set(
+      AgentRole.PROCUREMENT,
+      new ProcurementAgent({
+        ...agentConfig,
+        permissions: this.securityManager.getAgentPermissions(AgentRole.PROCUREMENT),
+        availableToolNames:
+          this.securityManager.getAgentPermissions(AgentRole.PROCUREMENT).allowedTools,
       })
     );
 
@@ -204,6 +265,42 @@ export class IntentOS {
       intentType.includes('compliance')
     ) {
       return AgentRole.LEGAL;
+    }
+
+    if (
+      intentType.includes('sales') ||
+      intentType.includes('lead') ||
+      intentType.includes('pipeline') ||
+      intentType.includes('deal')
+    ) {
+      return AgentRole.SALES;
+    }
+
+    if (
+      intentType.includes('marketing') ||
+      intentType.includes('campaign') ||
+      intentType.includes('brand') ||
+      intentType.includes('funnel')
+    ) {
+      return AgentRole.MARKETING;
+    }
+
+    if (
+      intentType.includes('it') ||
+      intentType.includes('incident') ||
+      intentType.includes('access') ||
+      intentType.includes('system outage')
+    ) {
+      return AgentRole.IT;
+    }
+
+    if (
+      intentType.includes('procurement') ||
+      intentType.includes('purchase') ||
+      intentType.includes('vendor') ||
+      intentType.includes('rfq')
+    ) {
+      return AgentRole.PROCUREMENT;
     }
 
     // Default to operations

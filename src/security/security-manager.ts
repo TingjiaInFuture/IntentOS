@@ -31,16 +31,18 @@ export class SecurityManager {
       role: AgentRole.HR,
       allowedTools: [
         'database_query',
-        'send_email',
-        'calendar_event',
-        'process_document',
+        'database_write',
+        'llm_reason',
+        'ai_notify',
+        'ai_schedule',
+        'knowledge_search',
+        'ai_document_analyze',
+        'ai_report',
         'file_system',
-        'slack_message',
-        'rpa_job',
       ],
       maxBudget: 10000, // Can approve up to $10k for hiring/training
       canApproveUp: 5000,
-      restrictions: ['Cannot access financial transactions', 'Cannot modify legal documents'],
+      restrictions: ['Cannot access financial transactions table', 'Cannot modify legal documents'],
     });
 
     // Finance Agent permissions
@@ -48,12 +50,12 @@ export class SecurityManager {
       role: AgentRole.FINANCE,
       allowedTools: [
         'database_query',
-        'send_email',
-        'payment_processing',
-        'crm_operation',
-        'salesforce_operation',
-        'sap_operation',
-        'rpa_job',
+        'database_write',
+        'llm_reason',
+        'ai_notify',
+        'knowledge_search',
+        'ai_report',
+        'ai_document_analyze',
         'http_request',
         'file_system',
       ],
@@ -67,15 +69,88 @@ export class SecurityManager {
       role: AgentRole.LEGAL,
       allowedTools: [
         'database_query',
-        'send_email',
-        'process_document',
-        'salesforce_operation',
+        'database_write',
+        'llm_reason',
+        'ai_notify',
+        'knowledge_search',
+        'ai_document_analyze',
+        'ai_report',
         'file_system',
-        'http_request',
       ],
       maxBudget: 50000,
       canApproveUp: 25000,
-      restrictions: ['Cannot execute payments', 'Cannot access HR records without approval'],
+      restrictions: ['Cannot execute financial transactions', 'Cannot access HR salary data'],
+    });
+
+    // Sales Agent permissions
+    this.agentPermissions.set(AgentRole.SALES, {
+      role: AgentRole.SALES,
+      allowedTools: [
+        'database_query',
+        'database_write',
+        'llm_reason',
+        'ai_notify',
+        'knowledge_search',
+        'ai_report',
+        'file_system',
+      ],
+      maxBudget: 30000,
+      canApproveUp: 10000,
+      restrictions: ['Cannot approve legal or finance exceptions'],
+    });
+
+    // Marketing Agent permissions
+    this.agentPermissions.set(AgentRole.MARKETING, {
+      role: AgentRole.MARKETING,
+      allowedTools: [
+        'database_query',
+        'database_write',
+        'llm_reason',
+        'ai_notify',
+        'knowledge_search',
+        'ai_report',
+        'file_system',
+      ],
+      maxBudget: 20000,
+      canApproveUp: 8000,
+      restrictions: ['Cannot access restricted HR/legal records'],
+    });
+
+    // IT Agent permissions
+    this.agentPermissions.set(AgentRole.IT, {
+      role: AgentRole.IT,
+      allowedTools: [
+        'database_query',
+        'database_write',
+        'llm_reason',
+        'ai_notify',
+        'ai_schedule',
+        'knowledge_search',
+        'ai_report',
+        'http_request',
+        'file_system',
+      ],
+      maxBudget: 25000,
+      canApproveUp: 10000,
+      restrictions: ['Cannot process direct financial disbursement'],
+    });
+
+    // Procurement Agent permissions
+    this.agentPermissions.set(AgentRole.PROCUREMENT, {
+      role: AgentRole.PROCUREMENT,
+      allowedTools: [
+        'database_query',
+        'database_write',
+        'llm_reason',
+        'ai_notify',
+        'knowledge_search',
+        'ai_document_analyze',
+        'ai_report',
+        'file_system',
+      ],
+      maxBudget: 50000,
+      canApproveUp: 15000,
+      restrictions: ['Requires legal review for high-risk vendor contracts'],
     });
 
     // Operations Agent permissions
@@ -83,14 +158,14 @@ export class SecurityManager {
       role: AgentRole.OPERATIONS,
       allowedTools: [
         'database_query',
+        'database_write',
+        'llm_reason',
+        'ai_notify',
+        'ai_schedule',
+        'knowledge_search',
+        'ai_report',
         'http_request',
-        'send_email',
-        'calendar_event',
         'file_system',
-        'slack_message',
-        'salesforce_operation',
-        'sap_operation',
-        'rpa_job',
       ],
       maxBudget: 25000,
       canApproveUp: 10000,

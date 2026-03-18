@@ -1,11 +1,9 @@
 /**
- * Legal Agent Implementation
- * Handles legal tasks like contract review, compliance checks, risk assessment
+ * Legal Agent
  */
 
 import { BaseAgent, AgentConfig } from './base-agent';
-import { AgentRole, PlanStep, WorkflowState } from '../types';
-import { v4 as uuidv4 } from 'uuid';
+import { AgentRole } from '../types';
 
 export class LegalAgent extends BaseAgent {
   constructor(config: Omit<AgentConfig, 'role'>) {
@@ -15,191 +13,33 @@ export class LegalAgent extends BaseAgent {
     });
   }
 
-  protected async generatePlanSteps(
-    goal: string,
-    context: Record<string, any>
-  ): Promise<PlanStep[]> {
-    const lowerGoal = goal.toLowerCase();
-    const steps: PlanStep[] = [];
+  protected getDefaultSystemPrompt(): string {
+    return `You are an AI-native Legal Agent for an enterprise management system.
 
-    if (lowerGoal.includes('contract') || lowerGoal.includes('agreement')) {
-      steps.push(
-        {
-          id: uuidv4(),
-          description: 'Extract and analyze contract terms',
-          reasoning: 'Identify key clauses and obligations',
-          expectedOutcome: 'Contract terms extracted and categorized',
-          dependencies: [],
-          riskLevel: 'low',
-        },
-        {
-          id: uuidv4(),
-          description: 'Identify potential legal risks and liabilities',
-          reasoning: 'Assess risk exposure',
-          expectedOutcome: 'Risk assessment report',
-          dependencies: [steps[0].id],
-          riskLevel: 'high',
-        },
-        {
-          id: uuidv4(),
-          description: 'Check compliance with relevant regulations',
-          reasoning: 'Ensure legal compliance',
-          expectedOutcome: 'Compliance verification',
-          dependencies: [steps[1].id],
-          riskLevel: 'high',
-        },
-        {
-          id: uuidv4(),
-          description: 'Draft suggested modifications or approve',
-          reasoning: 'Provide legal recommendations',
-          expectedOutcome: 'Legal review completed with recommendations',
-          dependencies: [steps[2].id],
-          riskLevel: 'high',
-        }
-      );
-    } else if (lowerGoal.includes('compliance')) {
-      steps.push(
-        {
-          id: uuidv4(),
-          description: 'Identify applicable regulations and standards',
-          reasoning: 'Determine compliance requirements',
-          expectedOutcome: 'List of applicable regulations',
-          dependencies: [],
-          riskLevel: 'low',
-        },
-        {
-          id: uuidv4(),
-          description: 'Audit current practices against requirements',
-          reasoning: 'Find compliance gaps',
-          expectedOutcome: 'Compliance gap analysis',
-          dependencies: [steps[0].id],
-          riskLevel: 'medium',
-        },
-        {
-          id: uuidv4(),
-          description: 'Generate compliance report with recommendations',
-          reasoning: 'Document findings and action items',
-          expectedOutcome: 'Compliance report',
-          dependencies: [steps[1].id],
-          riskLevel: 'medium',
-        }
-      );
-    } else if (lowerGoal.includes('risk')) {
-      steps.push(
-        {
-          id: uuidv4(),
-          description: 'Gather information about the situation/transaction',
-          reasoning: 'Understand the context for risk assessment',
-          expectedOutcome: 'Relevant information collected',
-          dependencies: [],
-          riskLevel: 'low',
-        },
-        {
-          id: uuidv4(),
-          description: 'Analyze legal and regulatory risks',
-          reasoning: 'Identify potential legal issues',
-          expectedOutcome: 'Risk analysis completed',
-          dependencies: [steps[0].id],
-          riskLevel: 'high',
-        },
-        {
-          id: uuidv4(),
-          description: 'Recommend risk mitigation strategies',
-          reasoning: 'Provide actionable risk management guidance',
-          expectedOutcome: 'Risk mitigation plan',
-          dependencies: [steps[1].id],
-          riskLevel: 'medium',
-        }
-      );
-    }
+DOMAIN EXPERTISE:
+- Contract review and risk analysis
+- Compliance checking against regulations
+- Legal risk assessment
+- Policy drafting and review
+- Intellectual property management
+- Regulatory filing tracking
 
-    return steps;
-  }
+AVAILABLE TOOLS: ${this.availableToolNames.join(', ')}
 
-  protected async executeStep(
-    step: PlanStep,
-    workflow: WorkflowState,
-    previousResults: Map<string, any>
-  ): Promise<any> {
-    console.log(`Legal Agent executing: ${step.description}`);
+RULES:
+1. All legal conclusions must include a disclaimer: AI analysis, not legal advice.
+2. High-risk legal determinations require human legal counsel approval.
+3. Use ai_document_analyze for contract analysis and risk scoring.
+4. Use knowledge_search for precedents, policies, and regulations.
+5. Use llm_reason for clause interpretation and legal reasoning.
+6. Use database_query for compliance and contract records.
+7. Use ai_notify for flagged legal issues.
+8. Never auto-approve contracts; always recommend human final review.
 
-    // Legal review always requires human oversight for high-risk items
-    if (step.riskLevel === 'high') {
-      return {
-        success: false,
-        requiresApproval: true,
-        error: `Legal high-risk step requires approval: ${step.description}`,
-        step: step.description,
-        riskLevel: step.riskLevel,
-      };
-    }
-
-    try {
-      const lowerStep = step.description.toLowerCase();
-
-      if (lowerStep.includes('extract and analyze contract terms')) {
-        const extraction = await this.executeTool('process_document', {
-          documentPath: workflow.context.documentPath || workflow.context.contractPath || '',
-          operation: 'extract_text',
-        });
-
-        return {
-          success: true,
-          stepId: step.id,
-          output: extraction,
-          riskLevel: step.riskLevel,
-          timestamp: new Date(),
-        };
-      }
-
-      if (lowerStep.includes('check compliance')) {
-        const compliance = await this.executeTool('sap_operation', {
-          operation: 'read',
-          servicePath: '/api/compliance/check',
-          query: {
-            workflowId: workflow.id,
-            jurisdiction: String(workflow.context.jurisdiction || 'global'),
-          },
-        });
-
-        return {
-          success: true,
-          stepId: step.id,
-          output: compliance,
-          riskLevel: step.riskLevel,
-          timestamp: new Date(),
-        };
-      }
-
-      if (lowerStep.includes('draft suggested modifications')) {
-        const notify = await this.executeTool('send_email', {
-          to: [workflow.context.requesterEmail || 'legal-review@example.com'],
-          subject: `Legal review update for workflow ${workflow.id}`,
-          body: `Legal review step completed: ${step.description}`,
-        });
-
-        return {
-          success: true,
-          stepId: step.id,
-          output: notify,
-          riskLevel: step.riskLevel,
-          timestamp: new Date(),
-        };
-      }
-
-      return {
-        success: true,
-        stepId: step.id,
-        output: `Completed: ${step.description}`,
-        riskLevel: step.riskLevel,
-        timestamp: new Date(),
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown legal execution error',
-        step: step.description,
-      };
-    }
+COMPLIANCE FRAMEWORK:
+- Flag unlimited liability clauses
+- Check for missing standard protections
+- Verify governing law and jurisdiction
+- Check data protection and privacy obligations`;
   }
 }
