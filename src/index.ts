@@ -20,6 +20,7 @@ export * from './approval/approval-system';
 export * from './audit/audit-log';
 export * from './security/security-manager';
 export * from './tools/tool-registry';
+export * from './workers/email-worker';
 export * from './orchestrator/intentos';
 
 import { IntentOS } from './orchestrator/intentos';
@@ -80,7 +81,44 @@ export function createIntentOS(config?: Partial<SystemConfig>): IntentOS {
     },
   };
 
-  const finalConfig = { ...defaultConfig, ...config };
+  const finalConfig: SystemConfig = {
+    ...defaultConfig,
+    ...config,
+    llm: {
+      ...defaultConfig.llm,
+      ...config?.llm,
+    },
+    database: {
+      ...defaultConfig.database,
+      ...config?.database,
+    },
+    vectorStore: config?.vectorStore
+      ? {
+          ...defaultConfig.vectorStore,
+          ...config.vectorStore,
+          config: {
+            ...(defaultConfig.vectorStore?.config || {}),
+            ...(config.vectorStore.config || {}),
+          },
+        }
+      : defaultConfig.vectorStore,
+    graphDB: config?.graphDB
+      ? {
+          ...defaultConfig.graphDB,
+          ...config.graphDB,
+        }
+      : defaultConfig.graphDB,
+    smtp: config?.smtp
+      ? {
+          ...defaultConfig.smtp,
+          ...config.smtp,
+        }
+      : defaultConfig.smtp,
+    security: {
+      ...defaultConfig.security,
+      ...config?.security,
+    },
+  };
   return new IntentOS(finalConfig);
 }
 

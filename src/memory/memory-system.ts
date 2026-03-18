@@ -4,6 +4,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
+import { Pool } from 'pg';
 import { Pinecone } from '@pinecone-database/pinecone';
 import { MilvusClient, DataType } from '@zilliz/milvus2-sdk-node';
 import neo4j, { Driver } from 'neo4j-driver';
@@ -38,6 +39,37 @@ export interface GraphDatabase {
 
 interface EmbeddingProvider {
   embed(text: string): Promise<number[]>;
+}
+
+export interface ConversationTurn {
+  id: string;
+  conversationId: string;
+  userId?: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  metadata: Record<string, any>;
+  createdAt: Date;
+}
+
+interface ConversationTurnInput {
+  conversationId: string;
+  userId?: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  metadata?: Record<string, any>;
+}
+
+const conversationPoolCache = new Map<string, Pool>();
+
+function getConversationPool(connectionString: string): Pool {
+  const existing = conversationPoolCache.get(connectionString);
+  if (existing) {
+    return existing;
+  }
+
+  const pool = new Pool({ connectionString });
+  conversationPoolCache.set(connectionString, pool);
+  return pool;
 }
 
 class OpenAIEmbeddingProvider implements EmbeddingProvider {
@@ -718,10 +750,14 @@ export class Neo4jGraphDatabase implements GraphDatabase {
 export class MemorySystem {
   private vectorStore: VectorStore;
   private graphDB: GraphDatabase;
+  private databaseUrl?: string;
+  private conversationCache: Map<string, ConversationTurn[]>;
 
-  constructor(vectorStore?: VectorStore, graphDB?: GraphDatabase) {
+  constructor(vectorStore?: VectorStore, graphDB?: GraphDatabase, databaseUrl?: string) {
     this.vectorStore = vectorStore || new InMemoryVectorStore();
     this.graphDB = graphDB || new InMemoryGraphDatabase();
+    this.databaseUrl = databaseUrl;
+    this.conversationCache = new Map();
   }
 
   /**
@@ -767,6 +803,85 @@ export class MemorySystem {
     }
 
     return { memoryId, entityId };
+  }
+
+  /**
+   * Store a conversation turn for later retrieval by conversationId.
+   */
+  async storeConversationTurn(turn: ConversationTurnInput): Promise<string> {
+    const id = uuidv4();
+    const entry: ConversationTurn = {
+      id,
+      conversationId: turn.conversationId,
+      userId: turn.userId,
+      role: turn.role,
+      content: turn.content,
+      metadata: turn.metadata || {},
+      createdAt: new Date(),
+    };
+
+    const cachedTurns = this.conversationCache.get(turn.conversationId) || [];
+    cachedTurns.push(entry);
+    this.conversationCache.set(turn.conversationId, cachedTurns.slice(-50));
+
+    if (!this.databaseUrl) {
+      return id;
+    }
+
+    try {
+      const pool = getConversationPool(this.databaseUrl);
+      await pool.query(
+        `INSERT INTO conversation_history (id, conversation_id, user_id, role, content, metadata, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          id,
+          turn.conversationId,
+          turn.userId || null,
+          turn.role,
+          turn.content,
+          JSON.stringify(turn.metadata || {}),
+          entry.createdAt,
+        ]
+      );
+    } catch (error) {
+      console.warn('Failed to persist conversation turn:', error);
+    }
+
+    return id;
+  }
+
+  /**
+   * Retrieve recent conversation turns for a conversation.
+   */
+  async getConversationHistory(conversationId: string, limit: number = 10): Promise<ConversationTurn[]> {
+    const cachedTurns = this.conversationCache.get(conversationId);
+    if (cachedTurns && cachedTurns.length > 0) {
+      return cachedTurns.slice(-limit);
+    }
+
+    if (!this.databaseUrl) {
+      return [];
+    }
+
+    let history: ConversationTurn[] = [];
+    try {
+      const pool = getConversationPool(this.databaseUrl);
+      const result = await pool.query(
+        `SELECT * FROM conversation_history
+         WHERE conversation_id = $1
+         ORDER BY created_at DESC
+         LIMIT $2`,
+        [conversationId, limit]
+      );
+
+      history = result.rows.map((row: any) => this.mapConversationTurn(row)).reverse();
+    } catch (error) {
+      console.warn('Failed to load conversation history:', error);
+      return cachedTurns ? cachedTurns.slice(-limit) : [];
+    }
+
+    this.conversationCache.set(conversationId, history.slice(-50));
+    return history;
   }
 
   /**
@@ -864,11 +979,13 @@ export class MemorySystem {
    */
   async getRelevantContext(
     userId: string,
-    taskDescription: string
+    taskDescription: string,
+    conversationId?: string
   ): Promise<{
     userInfo: GraphEntity | null;
     relatedEntities: GraphEntity[];
     relevantMemories: MemoryEntry[];
+    conversationHistory: ConversationTurn[];
   }> {
     // Get user entity
     const userEntities = await this.graphDB.queryEntities(userId);
@@ -882,12 +999,44 @@ export class MemorySystem {
 
     // Get relevant memories based on task
     const relevantMemories = await this.retrieve(taskDescription, 5);
+    const conversationHistory = conversationId
+      ? await this.getConversationHistory(conversationId, 10)
+      : [];
 
     return {
       userInfo,
       relatedEntities,
       relevantMemories,
+      conversationHistory,
     };
+  }
+
+  private mapConversationTurn(row: any): ConversationTurn {
+    return {
+      id: String(row.id),
+      conversationId: String(row.conversation_id),
+      userId: row.user_id ? String(row.user_id) : undefined,
+      role: row.role,
+      content: String(row.content || ''),
+      metadata: this.normalizeMetadata(row.metadata),
+      createdAt: new Date(row.created_at),
+    };
+  }
+
+  private normalizeMetadata(value: any): Record<string, any> {
+    if (!value) {
+      return {};
+    }
+
+    if (typeof value === 'string') {
+      try {
+        return JSON.parse(value);
+      } catch {
+        return { value };
+      }
+    }
+
+    return value;
   }
 
   async close(): Promise<void> {
@@ -961,5 +1110,5 @@ export function createMemorySystemFromConfig(config: SystemConfig): MemorySystem
     });
   }
 
-  return new MemorySystem(vectorStore, graphDB);
+  return new MemorySystem(vectorStore, graphDB, config.database.url);
 }

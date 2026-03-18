@@ -155,6 +155,38 @@ CREATE TABLE IF NOT EXISTS workflows (
   updated_at TIMESTAMP DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS approvals (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workflow_id VARCHAR(255) NOT NULL,
+  task_id VARCHAR(255) NOT NULL,
+  requested_by VARCHAR(50) NOT NULL,
+  description TEXT,
+  data JSONB DEFAULT '{}',
+  risk_level VARCHAR(20) DEFAULT 'medium',
+  deadline TIMESTAMP,
+  status VARCHAR(20) DEFAULT 'pending',
+  reviewed_by VARCHAR(255),
+  reviewed_at TIMESTAMP,
+  comments TEXT,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_approvals_workflow ON approvals(workflow_id);
+CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);
+
+CREATE TABLE IF NOT EXISTS conversation_history (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  conversation_id VARCHAR(255) NOT NULL,
+  user_id VARCHAR(255),
+  role VARCHAR(20) NOT NULL,
+  content TEXT NOT NULL,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversation_history_conversation ON conversation_history(conversation_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversation_history_user ON conversation_history(user_id, created_at DESC);
+
 -- Auto-update search vector
 CREATE OR REPLACE FUNCTION update_search_vector() RETURNS TRIGGER AS $$
 BEGIN

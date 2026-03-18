@@ -37,6 +37,7 @@ export class BaseAgent {
   protected apiKey?: string;
   protected systemPrompt: string;
   protected availableToolNames: string[];
+  private _openAIClient?: OpenAI;
 
   constructor(config: AgentConfig) {
     this.role = config.role;
@@ -499,12 +500,17 @@ Respond ONLY in JSON: { "steps": [...] }`,
   }
 
   protected getOpenAIClient(): OpenAI {
+    if (this._openAIClient) {
+      return this._openAIClient;
+    }
+
     const apiKey = this.apiKey || process.env.OPENAI_API_KEY;
     if (!apiKey) {
       throw new Error('OPENAI_API_KEY required');
     }
 
-    return new OpenAI({ apiKey });
+    this._openAIClient = new OpenAI({ apiKey });
+    return this._openAIClient;
   }
 
   private zodToJsonSchema(schema: any): any {
@@ -512,33 +518,169 @@ Respond ONLY in JSON: { "steps": [...] }`,
       return { type: 'object', additionalProperties: true };
     }
 
-    if (schema._def.typeName === 'ZodObject') {
-      const shape = schema._def.shape();
+    const typeName = schema._def.typeName;
+
+    if (typeName === 'ZodOptional' || typeName === 'ZodDefault' || typeName === 'ZodCatch') {
+      return this.zodToJsonSchema(schema._def.innerType || schema._def.schema || schema._def.type);
+    }
+
+    if (typeName === 'ZodNullable') {
+      return {
+        anyOf: [this.zodToJsonSchema(schema._def.innerType || schema._def.type), { type: 'null' }],
+        description: schema._def.description || '',
+      };
+    }
+
+    if (typeName === 'ZodEffects') {
+      return this.zodToJsonSchema(schema._def.schema);
+    }
+
+    if (typeName === 'ZodObject') {
+      const shape = typeof schema._def.shape === 'function' ? schema._def.shape() : schema._def.shape;
       const properties: Record<string, any> = {};
       const required: string[] = [];
 
       for (const [key, value] of Object.entries(shape) as Array<[string, any]>) {
-        properties[key] = {
-          type: 'string',
-          description: value?._def?.description || key,
-        };
+        properties[key] = this.zodToJsonSchema(value);
 
-        if (!value.isOptional?.()) {
+        if (!this.isOptionalSchema(value)) {
           required.push(key);
         }
       }
 
-      return {
+      const jsonSchema: Record<string, any> = {
         type: 'object',
         properties,
-        required,
+      };
+
+      if (required.length > 0) {
+        jsonSchema.required = required;
+      }
+
+      return jsonSchema;
+    }
+
+    if (typeName === 'ZodString') {
+      return { type: 'string', description: schema._def.description || '' };
+    }
+
+    if (typeName === 'ZodNumber') {
+      const jsonSchema: Record<string, any> = {
+        type: schema._def.checks?.some((check: any) => check.kind === 'int') ? 'integer' : 'number',
+        description: schema._def.description || '',
+      };
+
+      for (const check of schema._def.checks || []) {
+        if (check.kind === 'min') {
+          jsonSchema.minimum = check.value;
+        }
+
+        if (check.kind === 'max') {
+          jsonSchema.maximum = check.value;
+        }
+      }
+
+      return jsonSchema;
+    }
+
+    if (typeName === 'ZodBoolean') {
+      return { type: 'boolean', description: schema._def.description || '' };
+    }
+
+    if (typeName === 'ZodEnum') {
+      return {
+        type: 'string',
+        enum: schema._def.values || [],
+        description: schema._def.description || '',
       };
     }
 
+    if (typeName === 'ZodNativeEnum') {
+      return {
+        type: 'string',
+        enum: Object.values(schema._def.values).filter(
+          (value: any) => typeof value === 'string' || typeof value === 'number'
+        ),
+        description: schema._def.description || '',
+      };
+    }
+
+    if (typeName === 'ZodArray') {
+      return {
+        type: 'array',
+        items: this.zodToJsonSchema(schema._def.type),
+        description: schema._def.description || '',
+      };
+    }
+
+    if (typeName === 'ZodRecord') {
+      return {
+        type: 'object',
+        additionalProperties: schema._def.valueType ? this.zodToJsonSchema(schema._def.valueType) : true,
+        description: schema._def.description || '',
+      };
+    }
+
+    if (typeName === 'ZodUnion') {
+      return {
+        oneOf: schema._def.options.map((option: any) => this.zodToJsonSchema(option)),
+        description: schema._def.description || '',
+      };
+    }
+
+    if (typeName === 'ZodTuple') {
+      return {
+        type: 'array',
+        items: schema._def.items.map((item: any) => this.zodToJsonSchema(item)),
+        minItems: schema._def.items.length,
+        maxItems: schema._def.items.length,
+        description: schema._def.description || '',
+      };
+    }
+
+    if (typeName === 'ZodLiteral') {
+      return {
+        enum: [schema._def.value],
+        description: schema._def.description || '',
+      };
+    }
+
+    if (typeName === 'ZodDate') {
+      return {
+        type: 'string',
+        format: 'date-time',
+        description: schema._def.description || '',
+      };
+    }
+
+    if (typeName === 'ZodNull') {
+      return { type: 'null', description: schema._def.description || '' };
+    }
+
+    if (typeName === 'ZodAny' || typeName === 'ZodUnknown' || typeName === 'ZodUndefined') {
+      return { description: schema._def.description || '' };
+    }
+
     return {
-      type: 'object',
-      properties: {},
-      additionalProperties: true,
+      type: 'string',
+      description: schema._def?.description || '',
     };
+  }
+
+  private isOptionalSchema(schema: any): boolean {
+    if (!schema || !schema._def) {
+      return false;
+    }
+
+    const typeName = schema._def.typeName;
+    if (typeName === 'ZodOptional' || typeName === 'ZodDefault' || typeName === 'ZodCatch') {
+      return true;
+    }
+
+    if (typeName === 'ZodEffects') {
+      return this.isOptionalSchema(schema._def.schema);
+    }
+
+    return false;
   }
 }

@@ -3,23 +3,44 @@
  */
 
 import { User, UserRole, Permission, AgentRole, AgentPermissions } from '../types';
+import { v4 as uuidv4 } from 'uuid';
+import { Pool } from 'pg';
 import * as jwt from 'jsonwebtoken';
 import * as bcrypt from 'bcrypt';
+
+const securityPoolCache = new Map<string, Pool>();
+
+function getSecurityPool(connectionString: string): Pool {
+  const existing = securityPoolCache.get(connectionString);
+  if (existing) {
+    return existing;
+  }
+
+  const pool = new Pool({ connectionString });
+  securityPoolCache.set(connectionString, pool);
+  return pool;
+}
 
 export class SecurityManager {
   private users: Map<string, User>;
   private agentPermissions: Map<AgentRole, AgentPermissions>;
   private jwtSecret: string;
   private jwtExpiry: string;
+  private databaseUrl?: string;
+  public readonly ready: Promise<void>;
 
-  constructor(jwtSecret: string, jwtExpiry: string = '24h') {
+  constructor(jwtSecret: string, jwtExpiry: string = '24h', databaseUrl?: string) {
     this.users = new Map();
     this.agentPermissions = new Map();
     this.jwtSecret = jwtSecret;
     this.jwtExpiry = jwtExpiry;
+    this.databaseUrl = databaseUrl;
 
     // Initialize default agent permissions
     this.initializeDefaultAgentPermissions();
+    this.ready = this.loadUsersFromDatabase().catch((error) => {
+      console.warn('Failed to load users from database:', error);
+    });
   }
 
   /**
@@ -183,6 +204,8 @@ export class SecurityManager {
     role: UserRole,
     department?: string
   ): Promise<User> {
+    await this.ready;
+
     // Check if user already exists
     const existingUser = Array.from(this.users.values()).find(
       (u) => u.username === username || u.email === email
@@ -191,8 +214,21 @@ export class SecurityManager {
       throw new Error('User already exists');
     }
 
+    if (this.databaseUrl) {
+      const pool = getSecurityPool(this.databaseUrl);
+      const duplicate = await pool.query(
+        `SELECT id FROM employees WHERE username = $1 OR email = $2 LIMIT 1`,
+        [username, email]
+      );
+
+      if ((duplicate.rowCount || 0) > 0) {
+        throw new Error('User already exists');
+      }
+    }
+
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
+    const permissions = this.getDefaultPermissions(role);
 
     // Create user
     const user: User = {
@@ -200,15 +236,17 @@ export class SecurityManager {
       username,
       email,
       role,
-      permissions: this.getDefaultPermissions(role),
+      permissions,
       department,
       metadata: {
         passwordHash: hashedPassword,
         createdAt: new Date().toISOString(),
+        permissions,
       },
     };
 
     this.users.set(user.id, user);
+    await this.persistUser(user, hashedPassword);
     return user;
   }
 
@@ -216,12 +254,15 @@ export class SecurityManager {
    * Authenticate user and generate JWT token
    */
   async authenticate(username: string, password: string): Promise<{ user: User; token: string }> {
+    await this.ready;
+
     const user = Array.from(this.users.values()).find((u) => u.username === username);
-    if (!user) {
+    const resolvedUser = user || (await this.loadUserByUsername(username));
+    if (!resolvedUser) {
       throw new Error('Invalid credentials');
     }
 
-    const passwordHash = user.metadata?.passwordHash as string;
+    const passwordHash = (resolvedUser.metadata?.passwordHash as string) || '';
     const isValid = await bcrypt.compare(password, passwordHash);
     if (!isValid) {
       throw new Error('Invalid credentials');
@@ -230,15 +271,15 @@ export class SecurityManager {
     // Generate JWT token
     const token = jwt.sign(
       {
-        userId: user.id,
-        username: user.username,
-        role: user.role,
+        userId: resolvedUser.id,
+        username: resolvedUser.username,
+        role: resolvedUser.role,
       },
       this.jwtSecret as jwt.Secret,
       { expiresIn: this.jwtExpiry as jwt.SignOptions['expiresIn'] }
     );
 
-    return { user, token };
+    return { user: resolvedUser, token };
   }
 
   /**
@@ -344,7 +385,7 @@ export class SecurityManager {
    * Generate unique user ID
    */
   private generateUserId(): string {
-    return `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    return uuidv4();
   }
 
   /**
@@ -362,6 +403,16 @@ export class SecurityManager {
     } else {
       user.permissions.push({ resource, actions });
     }
+
+    user.metadata = {
+      ...(user.metadata || {}),
+      permissions: user.permissions,
+      passwordHash: user.metadata?.passwordHash,
+    };
+
+    void this.persistUser(user).catch((error) => {
+      console.error('Error persisting user permissions:', error);
+    });
   }
 
   /**
@@ -384,6 +435,16 @@ export class SecurityManager {
     } else {
       user.permissions = user.permissions.filter((p) => p.resource !== resource);
     }
+
+    user.metadata = {
+      ...(user.metadata || {}),
+      permissions: user.permissions,
+      passwordHash: user.metadata?.passwordHash,
+    };
+
+    void this.persistUser(user).catch((error) => {
+      console.error('Error persisting user permissions:', error);
+    });
   }
 
   /**
@@ -411,5 +472,132 @@ export class SecurityManager {
 
     user.role = newRole;
     user.permissions = this.getDefaultPermissions(newRole);
+    user.metadata = {
+      ...(user.metadata || {}),
+      permissions: user.permissions,
+      passwordHash: user.metadata?.passwordHash,
+    };
+
+    void this.persistUser(user).catch((error) => {
+      console.error('Error persisting user role:', error);
+    });
+  }
+
+  private async loadUsersFromDatabase(): Promise<void> {
+    if (!this.databaseUrl) {
+      return;
+    }
+
+    const pool = getSecurityPool(this.databaseUrl);
+    const result = await pool.query(`SELECT * FROM employees ORDER BY created_at ASC`);
+
+    for (const row of result.rows) {
+      const metadata = this.normalizeMetadata(row.metadata);
+      const permissions = Array.isArray(metadata.permissions)
+        ? metadata.permissions
+        : this.getDefaultPermissions(row.role as UserRole);
+
+      const user: User = {
+        id: String(row.id),
+        username: String(row.username),
+        email: String(row.email),
+        role: row.role as UserRole,
+        permissions,
+        department: row.department ? String(row.department) : undefined,
+        metadata: {
+          ...metadata,
+          passwordHash: row.password_hash,
+          createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
+        },
+      };
+
+      this.users.set(user.id, user);
+    }
+  }
+
+  private async loadUserByUsername(username: string): Promise<User | undefined> {
+    if (!this.databaseUrl) {
+      return undefined;
+    }
+
+    const pool = getSecurityPool(this.databaseUrl);
+    const result = await pool.query(`SELECT * FROM employees WHERE username = $1 LIMIT 1`, [username]);
+    const row = result.rows[0];
+    if (!row) {
+      return undefined;
+    }
+
+    const metadata = this.normalizeMetadata(row.metadata);
+    const permissions = Array.isArray(metadata.permissions)
+      ? metadata.permissions
+      : this.getDefaultPermissions(row.role as UserRole);
+
+    const user: User = {
+      id: String(row.id),
+      username: String(row.username),
+      email: String(row.email),
+      role: row.role as UserRole,
+      permissions,
+      department: row.department ? String(row.department) : undefined,
+      metadata: {
+        ...metadata,
+        passwordHash: row.password_hash,
+        createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
+      },
+    };
+
+    this.users.set(user.id, user);
+    return user;
+  }
+
+  private async persistUser(user: User, passwordHash?: string): Promise<void> {
+    if (!this.databaseUrl) {
+      return;
+    }
+
+    const pool = getSecurityPool(this.databaseUrl);
+    const metadata = {
+      ...(user.metadata || {}),
+      permissions: user.permissions,
+      passwordHash: passwordHash || (user.metadata?.passwordHash as string | undefined),
+    };
+
+    await pool.query(
+      `INSERT INTO employees (id, username, email, password_hash, role, department, metadata, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+       ON CONFLICT (id) DO UPDATE SET
+         username = EXCLUDED.username,
+         email = EXCLUDED.email,
+         password_hash = EXCLUDED.password_hash,
+         role = EXCLUDED.role,
+         department = EXCLUDED.department,
+         metadata = EXCLUDED.metadata,
+         updated_at = NOW()`,
+      [
+        user.id,
+        user.username,
+        user.email,
+        metadata.passwordHash,
+        user.role,
+        user.department || null,
+        metadata,
+      ]
+    );
+  }
+
+  private normalizeMetadata(metadata: any): Record<string, any> {
+    if (!metadata) {
+      return {};
+    }
+
+    if (typeof metadata === 'string') {
+      try {
+        return JSON.parse(metadata);
+      } catch {
+        return { value: metadata };
+      }
+    }
+
+    return metadata;
   }
 }

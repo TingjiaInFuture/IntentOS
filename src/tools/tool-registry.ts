@@ -9,6 +9,7 @@ import { Pool } from 'pg';
 import OpenAI from 'openai';
 import { z } from 'zod';
 import { Tool, ToolResult, SystemConfig } from '../types';
+import { EmailWorker } from '../workers/email-worker';
 
 // ============================================================================
 // Tool Registry
@@ -249,7 +250,7 @@ Respond in structured JSON.`,
   };
 }
 
-function createNotificationTool(connectionString?: string): Tool {
+function createNotificationTool(connectionString?: string, emailWorker?: EmailWorker): Tool {
   return {
     name: 'ai_notify',
     description:
@@ -269,9 +270,10 @@ function createNotificationTool(connectionString?: string): Tool {
       }
 
       const pool = getPool(cs);
+      const initialStatus = params.channel === 'in_app' ? 'sent' : 'queued';
       const result = await pool.query(
         `INSERT INTO notifications (recipient_id, channel, subject, body, priority, related_workflow_id, status, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, 'pending', NOW())
+         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
          RETURNING id`,
         [
           params.recipientId,
@@ -280,10 +282,12 @@ function createNotificationTool(connectionString?: string): Tool {
           params.body,
           params.priority || 'normal',
           params.relatedWorkflowId || null,
+          initialStatus,
         ]
       );
 
       const notificationId = result.rows[0]?.id;
+      let emailDeliveryStatus: 'sent' | 'queued' = initialStatus === 'sent' ? 'sent' : 'queued';
 
       if (params.channel === 'email' || params.channel === 'both') {
         await pool.query(
@@ -291,11 +295,27 @@ function createNotificationTool(connectionString?: string): Tool {
            VALUES ($1, $2, $3, $4, 'queued', NOW())`,
           [notificationId, params.recipientId, params.subject, params.body]
         );
+
+        emailDeliveryStatus = 'queued';
+
+        if (emailWorker) {
+          try {
+            await emailWorker.runOnce();
+          } catch (error) {
+            console.error('Email worker dispatch failed:', error);
+          }
+        }
+
+        const notificationStatus = await pool.query(
+          `SELECT status FROM notifications WHERE id = $1`,
+          [notificationId]
+        );
+        emailDeliveryStatus = notificationStatus.rows[0]?.status || emailDeliveryStatus;
       }
 
       return {
         notificationId,
-        status: 'sent',
+        status: emailDeliveryStatus,
       };
     },
   };
@@ -659,7 +679,7 @@ function createHttpRequestTool(): Tool {
 // Factory
 // ============================================================================
 
-export function createDefaultToolRegistry(config: SystemConfig): ToolRegistry {
+export function createDefaultToolRegistry(config: SystemConfig, emailWorker?: EmailWorker): ToolRegistry {
   const registry = new ToolRegistry();
   const dbUrl = config.database.url;
   const llmConfig = {
@@ -678,7 +698,7 @@ export function createDefaultToolRegistry(config: SystemConfig): ToolRegistry {
   registry.register(createDocumentAnalysisTool(llmConfig));
 
   // AI-native business tools
-  registry.register(createNotificationTool(dbUrl));
+  registry.register(createNotificationTool(dbUrl, emailWorker));
   registry.register(createSchedulingTool(dbUrl, llmConfig));
   registry.register(createKnowledgeSearchTool(dbUrl));
   registry.register(createReportTool(dbUrl, llmConfig));
